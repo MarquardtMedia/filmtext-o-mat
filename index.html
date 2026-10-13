@@ -1,0 +1,2285 @@
+<!DOCTYPE html>
+<!-- Filmtext-o-Mat V3.0 · © 2026 Ulf Marquardt · All rights reserved · No modification or redistribution without permission -->
+<!-- V2.83: new rows are stamped with the current video position when appended at the end · cursor now lands in the new row -->
+<!-- V2.9:  one file, two languages. Interface language (DE/EN) and script language are separate settings. -->
+<!-- V2.91: the two language pickers are labelled with language-neutral icons instead of translated words,
+     so they stay findable no matter which language the interface happens to be in. Inline SVG, not emoji:
+     Windows renders flag/emoji sequences as bare letters. -->
+<!-- V2.92: the "Sequence description" column can be hidden (toolbar button or Alt+Shift+D). Writing to
+     picture needs the video, not the description – hiding the column gives the narration text the width.
+     A view preference, not a document property: nothing is deleted, the descriptions stay in the file and
+     in the Word/CSV exports. Stored in localStorage, so the choice survives a reload. -->
+<!-- V2.93: a project remembers its film. The video file name is stored in the project JSON; in
+     Chrome/Edge the file HANDLE is additionally kept in IndexedDB (File System Access API).
+     On opening a project the video comes back by itself when the browser still holds read
+     permission (same session, or "allow on every visit"); otherwise a one-click banner
+     re-attaches it – the browser only asks for confirmation, no file dialog, no searching.
+     Browsers without the API (Firefox/Safari) at least show WHICH file belongs to the project.
+     The video itself is never copied anywhere; only a reference is stored. -->
+<!-- V2.94: spellchecking made robust. Since V2.9 the script language sat as a lang attribute on the
+     table BODY only; the editable fields inherited it. Some browsers (and browser versions) evaluate
+     spellcheck language strictly per element: Firefox picks the dictionary from the nearest lang
+     attribute and silently checks NOTHING when it has no dictionary for that exact locale; Chromium
+     ignores lang and goes by its own settings. The fields now carry lang AND spellcheck="true" as
+     explicit attributes themselves (title field included), and a language switch re-toggles the
+     spellcheck attribute so the browser re-evaluates immediately instead of on the next edit. -->
+<!-- V2.95: the start timecode now really governs the film. Until here the <video> clock (which always
+     counts from 0) and the script timecodes (start timecode + lengths) were two unconnected axes:
+     the clock under the player showed the raw video position, stamping wrote that raw position into a
+     column of absolute timecodes – with a start timecode of 10:00:00 every stamp therefore landed
+     "before row 1" and was rejected – and the ↦ button seeked to 10:00:0x inside the file. There is
+     now exactly one conversion pair, videoToTc() / tcToVideo(), and every stamp and seek goes through
+     it. state.offset is defined as the timecode of the FIRST FRAME of the film. Because row 1 does not
+     have to start on that frame, the gap between the two lives in state.lead ("lead-in"): it is 0 for
+     every existing project, is created by stamping or editing row 1, and shows up as a small badge
+     next to the start timecode that clears it on a click. SRT export converts back to a video-relative
+     clock – a subtitle file rides along with the film and has to start at 0. -->
+<!-- V2.955: less mouse travel, better visibility, better Word output.
+     · Every row now carries BOTH quick buttons (jump the video here ↦ / set block start to the video
+       position ◉) twice: next to the timecode on the left AND in the action column on the right.
+     · The video panel opens larger: about 36 % of the window width (440–720 px) instead of a fixed
+       372 px. Double-click on the drag handle returns to this size.
+     · Buttons and row icons are brighter and have more contrast against the dark background.
+     · Word export is a complete, current Word document (Office 2013+ / compatibilityMode 15, with
+       styles, settings and document properties), so Word no longer opens it in compatibility mode.
+     · Word export: 1.5 line spacing, and every paragraph is followed by an empty line.
+     · Word export: no page break inside a block – table rows can't split across pages and
+       paragraphs keep their lines together, so the narrator never has to turn mid-passage.
+     · Print / PDF now follows the Word export: same font size, line spacing, empty lines, columns,
+       no block split across a page, header row repeated on every page. -->
+<!-- V2.956: the film can be swapped while working. Until here the drop zone was the only way
+     into the file chooser, and it disappears the moment a film is on screen – a new cut or a
+     re-rendered proxy meant reloading the page and opening the project again. The film panel
+     now carries a "Change film…" button next to the file name; it opens the same chooser, keeps
+     the player at the position it was at (a shorter version starts at 0) and writes the new file
+     name into the project, so the next save remembers the new version. The script is never
+     touched: timecodes, lengths and text stay exactly as they are – only the film behind them
+     is exchanged. If the new version has a different lead-in, the start timecode in the header
+     is the one place to correct. -->
+<!-- V3.0: from file to web app. The Filmtext-o-Mat is now published under ONE web address and
+     opened from there on every device – Windows, Mac, iPad, iPhone, Android, any browser. A file
+     passed around can never work on iPad/iPhone (the preview runs no scripts, Safari opens no local
+     files); a link always does.
+     · manifest.webmanifest + icons: the app can be installed ("Add to Home Screen" / "Install") and
+       then starts in its own window like a program.
+     · sw.js (service worker): the app keeps working offline after the first visit. It always asks the
+       network first, so an uploaded new version reaches everybody on their next start; only without
+       a connection does the stored copy answer.
+     · Saving on iPad/iPhone: an installed home-screen app cannot reliably trigger downloads there, so
+       on iOS/iPadOS the share sheet opens instead ("Save to Files"). Everywhere else nothing changes.
+     · Films and projects still never leave the device: the server only delivers the program. -->
+<!-- V2.957: a visible notice when the script does not run. Every label of the interface is
+     written by JavaScript (i18n), so without it the page shows only an empty shell – exactly what
+     the file preview on iPad/iPhone (Quick Look, Files app, Mail) produces, because it renders HTML
+     but never executes scripts. A static banner at the top of the page now explains this in German
+     and English. It is part of the HTML and visible by default; the script removes it as its very
+     last start-up step. So it also stays on screen if the script stops anywhere on the way. -->
+<html lang="en" data-app="filmtext-o-mat">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Filmtext-o-Mat</title>
+<meta name="theme-color" content="#15120f">
+<meta name="description" content="Filmtexte schreiben mit automatischem Timecode · TV script writing with auto timecode">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Filmtext-o-Mat">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root{
+    --bg:#15120f;
+    --panel:#1d1a16;
+    --panel-2:#232019;
+    --line:#332e26;
+    --line-soft:#2a261f;
+    --ink:#ece5d8;
+    --muted:#9b9384;
+    --muted-2:#6f685c;
+    --accent:#e0a458;
+    --accent-dim:#a9783a;
+    --accent-soft:rgba(224,164,88,.12);
+    --danger:#c8674f;
+    --ok:#8ca96b;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:"Avenir Next","Segoe UI",system-ui,-apple-system,Helvetica,Arial,sans-serif;
+    --mono:"SF Mono","JetBrains Mono","Cascadia Code",Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(1100px 600px at 80% -10%, rgba(224,164,88,.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(140,169,107,.045), transparent 60%),
+      var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:15px;
+    line-height:1.45;
+    min-height:100vh;
+  }
+  a{color:var(--accent)}
+
+  /* ---- Top bar ---- */
+  header{
+    position:sticky;top:0;z-index:30;
+    background:linear-gradient(180deg, rgba(21,18,15,.97), rgba(21,18,15,.88));
+    backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line);
+    padding:14px 22px 12px;
+    overflow:hidden;
+  }
+  .titlerow{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .brand{
+    font-family:var(--serif);
+    font-size:25px;font-weight:600;letter-spacing:.2px;
+    color:var(--ink);
+  }
+  .brand .dot{color:var(--accent)}
+  .sub{color:var(--muted-2);font-size:12.5px;letter-spacing:.5px;text-transform:uppercase}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+  .field{display:flex;flex-direction:column;gap:3px}
+  .field label{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted-2)}
+  input[type=text]{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    border-radius:7px;padding:7px 10px;font-family:var(--sans);font-size:14px;
+    outline:none;transition:border-color .15s, box-shadow .15s;
+  }
+  input[type=text]:focus{border-color:var(--accent-dim);box-shadow:0 0 0 3px var(--accent-soft)}
+  .offset-in{font-family:var(--mono);width:120px;text-align:center}
+  .offsetwrap{display:flex;align-items:center;gap:6px}
+  .leadbadge{display:none;font-family:var(--mono);font-size:10.5px;line-height:1;
+    color:var(--muted-2);background:transparent;border:1px solid var(--line);
+    border-radius:5px;padding:5px 6px;cursor:pointer;white-space:nowrap}
+  .leadbadge:hover{color:var(--accent);border-color:var(--accent)}
+  .leadbadge.on{display:inline-block}
+  .title-in{width:min(560px,55vw)}
+  select.sel-in{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    border-radius:7px;padding:7px 8px;font-family:var(--sans);font-size:14px;
+    outline:none;cursor:pointer;transition:border-color .15s, box-shadow .15s;
+  }
+  select.sel-in:focus{border-color:var(--accent-dim);box-shadow:0 0 0 3px var(--accent-soft)}
+
+  /* Language pickers: icon + autonym, no translated label and no flags.
+     Flags denote countries, not languages (Français ≠ France for a Walloon editor),
+     and Windows draws flag emoji as two bare letters. Hence inline SVG. */
+  .langfield{flex-direction:row;align-items:center;gap:7px;align-self:flex-end}
+  .langicon{width:19px;height:19px;flex:0 0 19px;display:block;color:var(--muted-2);transition:color .15s}
+  .langfield:hover .langicon,.langfield:focus-within .langicon{color:var(--accent)}
+  .vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .spacer{flex:1 1 auto}
+
+  button{
+    font-family:var(--sans);font-size:13.5px;cursor:pointer;
+    background:#3a342b;color:#f4eee3;
+    border:1px solid #5e5547;border-radius:7px;padding:8px 13px;
+    transition:background .14s,border-color .14s,transform .04s;
+    white-space:nowrap;
+  }
+  button:hover{background:#4a4237;border-color:#7a6f5e}
+  button:active{transform:translateY(1px)}
+  button.primary{background:var(--accent);color:#231706;border-color:var(--accent);font-weight:600}
+  button.primary:hover{background:#ecb168}
+  button.ghost{background:#2e2922}
+  button.ghost:hover{background:#4a4237}
+  .dirty-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-left:7px;visibility:hidden;vertical-align:middle}
+  body.dirty .dirty-dot{visibility:visible}
+
+  /* ---- Layout ---- */
+  main{display:flex;gap:0;align-items:flex-start}
+  .scriptcol{flex:1 1 auto;min-width:0;padding:18px 22px 24px}
+  .videocol{
+    flex:0 0 var(--videow,560px);width:var(--videow,560px);
+    position:sticky;top:var(--appbar,118px);align-self:flex-start;
+    padding:18px 6px 22px 22px;
+  }
+  /* Drag handle between video and table */
+  .vresizer{
+    flex:0 0 10px;align-self:stretch;
+    position:sticky;top:var(--appbar,118px);height:calc(100vh - var(--appbar,120px));
+    cursor:col-resize;display:flex;align-items:center;justify-content:center;
+    z-index:18;touch-action:none;
+  }
+  .vresizer::before{
+    content:"";width:2px;height:46px;border-radius:2px;background:var(--line);
+    transition:background .14s,height .14s;
+  }
+  .vresizer:hover::before{background:var(--accent-dim);height:70px}
+  body.resizing{cursor:col-resize;user-select:none}
+  body.resizing .vresizer::before{background:var(--accent)}
+  @media (max-width:980px){
+    main{flex-direction:column}
+    .videocol{position:sticky;top:var(--appbar,108px);width:100%;flex-basis:auto;padding:14px 22px 4px;z-index:20;background:var(--bg)}
+    .scriptcol{width:100%;padding-top:8px}
+    .vresizer{display:none}
+  }
+
+  /* ---- Table ---- */
+  .tablewrap{
+    border:1px solid var(--line);border-radius:12px;background:var(--panel);
+    overflow:auto;max-height:calc(100vh - var(--appbar,120px) - 96px);
+  }
+  table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+  thead th{
+    background:var(--panel-2);
+    font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);
+    font-weight:600;text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:5;
+  }
+  th.c-num{width:34px;text-align:center}
+  th.c-tc{width:176px}
+  th.c-text{width:36%}
+  th.c-desc{width:36%}
+  th.c-len{width:96px}
+  th.c-act{width:150px;text-align:center}
+
+  /* Description column hidden: the text column takes the freed width.
+     display:none also removes the field from the tab order and from print. */
+  body.nodesc th.c-desc,
+  body.nodesc td.c-desc{display:none}
+  body.nodesc th.c-text{width:auto}
+
+  tbody tr{vertical-align:top}
+  tbody td{border-bottom:1px solid var(--line-soft)}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:rgba(255,255,255,.012)}
+  tbody tr.broll{background:rgba(140,169,107,.05)}
+  tbody tr.broll:hover{background:rgba(140,169,107,.08)}
+  td{padding:9px 12px}
+  td.num{text-align:center;color:var(--muted-2);font-family:var(--mono);font-size:12px;padding-top:14px}
+  td.tc{font-family:var(--mono);white-space:nowrap;padding-top:11px}
+  .tc-in{
+    width:96px;background:transparent;border:1px solid transparent;border-radius:6px;
+    color:var(--accent);font-family:var(--mono);font-size:14.5px;letter-spacing:.5px;
+    padding:6px 6px;outline:none;transition:border-color .14s,background .14s,box-shadow .14s;
+  }
+  .tc-in:hover{border-color:var(--line)}
+  .tc-in:focus{border-color:var(--accent-dim);background:rgba(0,0,0,.18);box-shadow:0 0 0 3px var(--accent-soft)}
+  .seek-btn{
+    width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;
+    background:transparent;border:1px solid transparent;border-radius:6px;color:#cfc6b6;
+    font-size:13px;padding:0;margin-left:2px;vertical-align:middle;opacity:.8;transition:opacity .14s,color .14s,background .14s,border-color .14s;
+  }
+  tr:hover .seek-btn{opacity:1}
+  .seek-btn:hover{background:#3a342b;border-color:#5e5547;color:var(--accent)}
+
+  .ta{
+    width:100%;background:transparent;border:1px solid transparent;border-radius:6px;
+    color:var(--ink);font-family:var(--sans);font-size:14.5px;line-height:1.5;
+    padding:5px 7px;outline:none;min-height:34px;cursor:text;
+    overflow-wrap:break-word;white-space:pre-wrap;
+    transition:border-color .14s,background .14s;
+  }
+  .ta.desc{color:var(--muted);font-size:13px}
+  .ta:hover{border-color:var(--line)}
+  .ta:focus{border-color:var(--accent-dim);background:rgba(0,0,0,.18);box-shadow:0 0 0 3px var(--accent-soft)}
+  .ta:empty::before{content:attr(data-ph);color:var(--muted-2);pointer-events:none}
+  .fmtgroup{display:flex;gap:4px}
+  button.fmt{width:36px;padding:7px 0;text-align:center}
+  button.fmt b,button.fmt i,button.fmt u{pointer-events:none}
+
+  /* Column toggle – icon only, like the language pickers: no word to translate */
+  button.colbtn{width:40px;padding:8px 0}
+  button.colbtn svg{width:19px;height:19px;display:block;margin:0 auto;pointer-events:none}
+  button.colbtn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent-dim);background:var(--accent-soft)}
+  button.colbtn[aria-pressed="true"]:hover{background:rgba(224,164,88,.18)}
+  button.colbtn .slash{opacity:0}
+  button.colbtn[aria-pressed="false"] .colb{opacity:.22}
+  button.colbtn[aria-pressed="false"] .slash{opacity:1}
+  .len-in{
+    width:84px;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    font-family:var(--mono);font-size:14px;text-align:center;border-radius:6px;padding:7px 4px;
+    outline:none;transition:border-color .14s,box-shadow .14s;
+  }
+  .len-in:focus{border-color:var(--accent-dim);box-shadow:0 0 0 3px var(--accent-soft)}
+
+  /* row actions */
+  td.act{text-align:center;padding-top:11px}
+  .rowbtns{display:inline-flex;gap:1px;opacity:.8;transition:opacity .14s}
+  tr:hover .rowbtns{opacity:1}
+  .ic{
+    width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
+    background:transparent;border:1px solid transparent;border-radius:6px;color:#cfc6b6;
+    font-size:13px;padding:0;line-height:1;
+  }
+  .ic:hover{background:#3a342b;border-color:#5e5547;color:#fff}
+  .ic.del:hover{color:var(--danger);border-color:#5a3027}
+  .ic.stamp:hover,.ic.seek:hover{color:var(--accent)}
+
+  /* total */
+  tfoot td{padding:14px 12px;background:var(--panel-2);border-top:2px solid var(--line)}
+  .totlabel{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+  .totval{font-family:var(--mono);font-size:18px;color:var(--accent);letter-spacing:.5px}
+
+  .addrow{display:flex;gap:10px;margin-top:14px;align-items:center}
+  .stat{color:var(--muted-2);font-size:12.5px}
+  .savednote{margin-left:12px;color:var(--ok);font-style:italic}
+  .stat b{color:var(--muted);font-family:var(--mono);font-weight:500}
+
+  /* ---- Video panel ---- */
+  .vpanel{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+  .vhead{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .vhead .lbl{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+  /* V2.956: the file name may be long – it shrinks, the swap button keeps its size */
+  .vhead .hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vhead .vswap{flex:0 0 auto;margin-left:auto;font-size:11.5px;padding:5px 9px;white-space:nowrap}
+  video{width:100%;display:block;background:#000;aspect-ratio:16/9}
+  .vdrop{
+    aspect-ratio:16/9;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;
+    color:var(--muted-2);text-align:center;padding:18px;cursor:pointer;
+    background:repeating-linear-gradient(45deg,#1a1713,#1a1713 12px,#1c1915 12px,#1c1915 24px);
+  }
+  .vdrop:hover{color:var(--muted)}
+  .vdrop .big{font-size:30px;opacity:.5}
+  .vbar{padding:11px 14px;display:flex;flex-direction:column;gap:10px}
+  .vtime{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .vtime .now{font-family:var(--mono);font-size:22px;color:var(--accent);letter-spacing:1px}
+  .vtime .dur{font-family:var(--mono);font-size:12px;color:var(--muted-2)}
+  .vrow{display:flex;gap:7px;flex-wrap:wrap}
+  .vrow button{flex:1 1 auto;font-size:12.5px;padding:7px 8px}
+  .hint{color:var(--muted-2);font-size:11.5px;line-height:1.5}
+  .hint kbd{font-family:var(--mono);background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px;color:var(--muted)}
+  /* Banner: "this project's film is …" with a one-click re-attach button */
+  .vrestore{
+    padding:12px 14px;border-top:1px solid var(--line);
+    background:var(--accent-soft);
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    font-size:12.5px;color:var(--muted);line-height:1.5;
+  }
+  .vrestore .vrname{font-family:var(--mono);font-size:11.5px;color:var(--accent);word-break:break-all;flex:1 1 140px}
+  .vrestore button{flex:0 0 auto;font-size:12.5px;padding:7px 11px}
+  .verror{padding:13px 15px;border-top:1px solid var(--line);background:rgba(200,103,79,.08);color:#e8b8ab;font-size:12.5px;line-height:1.55}
+  .verror b{color:#f0d2c8}
+  .verror button{margin-top:9px}
+
+  /* ---- Modal ---- */
+  .overlay{
+    position:fixed;inset:0;z-index:70;display:none;
+    align-items:center;justify-content:center;padding:20px;
+    background:rgba(8,6,4,.6);backdrop-filter:blur(3px);
+  }
+  .overlay.show{display:flex}
+  .modal{
+    width:min(440px,94vw);background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:22px 24px;box-shadow:0 24px 60px rgba(0,0,0,.55);
+  }
+  .modal-h{font-family:var(--serif);font-size:21px;margin-bottom:4px}
+  .modal-sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .presets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .preset{font-size:12.5px;padding:7px 11px}
+  .cols,.opts{display:flex;flex-direction:column;gap:9px;margin-bottom:16px}
+  .opts{border-top:1px solid var(--line-soft);padding-top:14px}
+  .ck{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--ink);cursor:pointer;user-select:none}
+  .ck input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+  .modal-f{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
+  .bklist{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;max-height:320px;overflow:auto}
+  .bslot{display:flex;align-items:center;gap:12px;justify-content:space-between;border:1px solid var(--line);border-radius:9px;padding:9px 12px;background:var(--panel-2)}
+  .bslot .bmeta{min-width:0;flex:1 1 auto}
+  .bslot .btitle{font-size:14px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bslot .bsub{font-size:11.5px;color:var(--muted-2);font-family:var(--mono);margin-top:2px}
+  .bslot button{flex:0 0 auto;font-size:12.5px;padding:7px 10px}
+
+  .toast{
+    position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
+    background:#2a261f;border:1px solid var(--line);color:var(--ink);
+    padding:11px 18px;border-radius:9px;font-size:13.5px;box-shadow:0 10px 30px rgba(0,0,0,.5);
+    opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:60;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  .filehidden{display:none}
+
+
+  /* ---- V2.957: notice for previews that don't run JavaScript ---- */
+  .nojs{
+    position:relative;z-index:40;
+    margin:0;padding:16px 22px;
+    background:#3a2a14;border-bottom:2px solid var(--accent);
+    color:#f6ead6;font-family:var(--sans);font-size:15px;line-height:1.55;
+  }
+  .nojs b{color:#ffd59a}
+  .nojs p{margin:0 0 6px}
+  .nojs p:last-child{margin:0}
+  .nojs .en{color:#d9c8ad;font-size:13.5px}
+
+  /* ---- Print ---- */
+  /* V2.955: print / PDF follows the Word export – A4 with 2 cm margins, Calibri 12 pt, 1.5 line
+     spacing, an empty line after every paragraph, same columns and widths, no block split
+     across a page, header row repeated on every page. */
+  @page{size:A4 portrait;margin:20mm}
+  @media print{
+    body{background:#fff !important;color:#000;font-family:Calibri,Carlito,"Segoe UI",Arial,sans-serif;font-size:12pt;line-height:1.75}
+    header,.nojs,.videocol,.addrow,.rowbtns,.dirty-dot,.toolbar,.toast,.seek-btn,.vresizer{display:none !important}
+    .scriptcol{padding:0}
+    main{display:block}
+    .brandprint{display:block;font-family:inherit;font-size:16pt;font-weight:700;line-height:1.75;margin:0 0 1.75em}
+    .brandprint:empty{display:none}
+    .tablewrap{border:none;border-radius:0;background:#fff;max-height:none !important;overflow:visible !important}
+    table{border-collapse:collapse;border:1px solid #999;table-layout:fixed;width:100%}
+    thead{display:table-header-group}                    /* repeat the header on every page */
+    tfoot{display:table-row-group}                       /* total only once, at the end */
+    th.c-num,td.num,th.c-act,td.act,tfoot td:first-child,tfoot td:last-child{display:none}
+    th.c-tc,th.c-len{width:14.8%}
+    th.c-text{width:46.9%}
+    th.c-desc{width:31.3%}
+    body.nodesc th.c-text{width:auto}
+    thead th{background:#efefef !important;color:#000;position:static;border:1px solid #ccc;
+      font-size:12pt;font-weight:700;letter-spacing:0;text-transform:none;padding:4px 6px;line-height:1.75;
+      -webkit-print-color-adjust:exact;print-color-adjust:exact}
+    tbody tr,tfoot tr{break-inside:avoid;page-break-inside:avoid}   /* a block never splits across pages */
+    tbody td,tfoot td{border:1px solid #ccc;padding:4px 6px;vertical-align:top;background:#fff !important}
+    tbody tr.broll{background:#fff}
+    td.tc{font-family:inherit;padding-top:4px}
+    input.tc-in,input.len-in{font-family:inherit !important;font-size:12pt !important;letter-spacing:0;color:#000 !important;
+      background:transparent !important;border:none !important;border-radius:0 !important;padding:0 !important;
+      width:100% !important;text-align:left !important;box-shadow:none !important;line-height:1.75}
+    .ta{display:none !important}
+    .print-text{display:block;color:#000;font-family:inherit;font-size:12pt;line-height:1.75;
+      white-space:pre-wrap;overflow-wrap:break-word;padding:0}
+    .print-text .pp{margin:0;min-height:1.75em}
+    .print-text .pp.gap{margin-bottom:1.75em}          /* the empty line after each paragraph */
+    tfoot td{background:#fff !important;padding:4px 6px}
+    .totlabel{font-size:12pt;letter-spacing:0;text-transform:none;color:#000;font-weight:700}
+    tfoot td.tc .totlabel{display:none}
+    .totval{font-family:inherit;font-size:12pt;letter-spacing:0;color:#000;font-weight:700}
+  }
+  @media screen{.print-text{display:none}}
+</style>
+</head>
+<body>
+<div class="nojs" id="nojs" role="alert">
+  <p><b>⚠ Diese Ansicht führt kein JavaScript aus – deshalb fehlen alle Beschriftungen.</b><br>
+  Das passiert z.&nbsp;B. in der Dateivorschau auf iPad/iPhone (Dateien-App, Mail, Messenger). Bitte den Filmtext-o-Mat über den Link öffnen: auf <b>ulf-marquardt.de</b> den Button „Filmtext-o-Mat starten“ antippen.</p>
+  <p class="en"><b>This view does not run JavaScript – that's why all labels are missing.</b>
+  This happens e.g. in the file preview on iPad/iPhone. Please open the Filmtext-o-Mat via its link: the “Filmtext-o-Mat starten” button on <b>ulf-marquardt.de</b>.</p>
+</div>
+<header>
+  <div class="titlerow">
+    <span class="brand">Filmtext<span class="dot">-o-</span>Mat</span>
+    <span class="sub" data-i18n="app.sub"></span>
+  </div>
+  <div class="toolbar">
+    <div class="field">
+      <label data-i18n="field.title"></label>
+      <input type="text" id="projTitle" class="title-in" data-i18n-ph="ph.title">
+    </div>
+    <div class="field">
+      <label data-i18n="field.offset"></label>
+      <div class="offsetwrap">
+        <input type="text" id="offset" class="offset-in" value="00:00:00" data-i18n-title="tt.offset">
+        <button type="button" id="leadBadge" class="leadbadge" data-i18n-title="tt.lead"></button>
+      </div>
+    </div>
+    <div class="field">
+      <label data-i18n="field.format"></label>
+      <div class="fmtgroup">
+        <button id="fmtB" class="fmt" data-i18n-title="tt.bold"><b data-i18n="fmt.b"></b></button>
+        <button id="fmtI" class="fmt" data-i18n-title="tt.italic"><i data-i18n="fmt.i"></i></button>
+        <button id="fmtU" class="fmt" data-i18n-title="tt.underline"><u data-i18n="fmt.u"></u></button>
+      </div>
+    </div>
+    <div class="field">
+      <label data-i18n="field.columns"></label>
+      <button id="btnDesc" class="fmt colbtn" aria-pressed="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <rect x="3" y="4.5" width="7" height="15" rx="1.5"/>
+          <rect class="colb" x="14" y="4.5" width="7" height="15" rx="1.5"/>
+          <path class="slash" d="M5 20.5 19.5 3.5" stroke-width="1.8"/>
+        </svg>
+      </button>
+    </div>
+    <div class="field langfield" title="Interface language · Sprache der Oberfläche">
+      <svg class="langicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>
+        <path d="M12 3c2.5 2.8 3.7 5.8 3.7 9s-1.2 6.2-3.7 9c-2.5-2.8-3.7-5.8-3.7-9s1.2-6.2 3.7-9z"/>
+      </svg>
+      <label class="vh" for="uiLangSel">Interface language · Sprache der Oberfläche</label>
+      <select id="uiLangSel" class="sel-in" aria-label="Interface language · Sprache der Oberfläche">
+        <option value="de">Deutsch</option>
+        <option value="en">English</option>
+      </select>
+    </div>
+    <div class="field langfield" title="Language of the narration text · Sprache des Sprechertextes">
+      <svg class="langicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M5 15 10 4.5 15 15"/><path d="M7 11.3h6"/>
+        <path d="M3 18.6q2-2 4 0t4 0 4 0 4 0"/>
+      </svg>
+      <label class="vh" for="textLangSel">Language of the narration text · Sprache des Sprechertextes</label>
+      <select id="textLangSel" class="sel-in" aria-label="Language of the narration text · Sprache des Sprechertextes">
+        <option value="de">Deutsch</option>
+        <option value="en">English</option>
+        <option value="fr">Français</option>
+        <option value="nl">Nederlands</option>
+        <option value="es">Español</option>
+        <option value="it">Italiano</option>
+      </select>
+    </div>
+    <div class="spacer"></div>
+    <button id="btnNew" class="ghost" data-i18n="btn.new"></button>
+    <button id="btnLoad" class="ghost" data-i18n="btn.open"></button>
+    <button id="btnBackups" class="ghost" data-i18n="btn.backups" data-i18n-title="tt.backups"></button>
+    <button id="btnSave" class="primary"><span data-i18n="btn.save"></span><span class="dirty-dot" id="dirtyDot"></span></button>
+    <button id="btnSaveAs" class="ghost" data-i18n="btn.saveAs" data-i18n-title="tt.saveAs"></button>
+    <button id="btnDocx" class="ghost" data-i18n="btn.docx"></button>
+    <button id="btnCsv" class="ghost" data-i18n="btn.csv"></button>
+    <button id="btnSrt" class="ghost" data-i18n="btn.srt"></button>
+    <button id="btnPrint" class="ghost" data-i18n="btn.print"></button>
+    <a href="https://ko-fi.com/ulfmarquardt" target="_blank" rel="noopener" class="ghost" style="font-size:12px;text-decoration:none;opacity:0.6;white-space:nowrap;margin-left:auto;flex-shrink:0" data-i18n="btn.kofi" data-i18n-title="tt.kofi"></a>
+  </div>
+</header>
+
+<main>
+  <aside class="videocol">
+    <div class="vpanel">
+      <div class="vhead"><span class="lbl" data-i18n="v.film"></span><span class="hint" id="vname"></span><button id="btnVSwap" class="ghost vswap" data-i18n="v.swap" data-i18n-title="v.swapTip" style="display:none"></button></div>
+      <div id="vdrop" class="vdrop">
+        <div class="big">▶</div>
+        <div><span data-i18n="v.choose"></span><br><span style="font-size:11px" data-i18n="v.local"></span></div>
+        <div style="font-size:10.5px;color:var(--muted-2);margin-top:2px" data-i18n="v.formats"></div>
+      </div>
+      <video id="video" controls preload="metadata" playsinline style="display:none"></video>
+      <div id="vrestore" class="vrestore" style="display:none"></div>
+      <div id="verror" class="verror" style="display:none"></div>
+      <div class="vbar">
+        <div class="vtime">
+          <span class="now" id="vnow">00:00:00</span>
+          <span class="dur" id="vdur">/ 00:00:00</span>
+        </div>
+        <div class="vrow">
+          <button id="vback5" data-i18n="v.back5"></button>
+          <button id="vplay" data-i18n="v.play"></button>
+          <button id="vfwd5" data-i18n="v.fwd5"></button>
+        </div>
+        <div class="hint" data-i18n-html="hint.html"></div>
+      
+      </div>
+    </div>
+  </aside>
+
+  <div class="vresizer" id="vresizer" data-i18n-title="tt.vresizer"></div>
+
+  <section class="scriptcol">
+    <div class="brandprint" id="printTitle"></div>
+    <div class="tablewrap">
+      <table id="grid">
+        <thead>
+          <tr>
+            <th class="c-num">#</th>
+            <th class="c-tc" data-i18n="th.tc"></th>
+            <th class="c-text" data-i18n="th.text"></th>
+            <th class="c-desc" data-i18n="th.desc"></th>
+            <th class="c-len" data-i18n="th.len"></th>
+            <th class="c-act"></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+        <tfoot>
+          <tr>
+            <td></td>
+            <td class="tc"><span class="totlabel" data-i18n="foot.end"></span></td>
+            <td colspan="2" id="footTotalCell"><span class="totlabel" data-i18n="foot.total"></span></td>
+            <td class="tc"><span class="totval" id="totalLen">00:00:00</span></td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div class="addrow">
+      <button id="btnAdd" class="ghost" data-i18n="btn.addRow"></button>
+      <span class="stat"><b id="cntRows">0</b> <span data-i18n="stat.rows"></span> · <b id="cntText">0</b> <span data-i18n="stat.withText"></span> · <span data-i18n="stat.endTime"></span> <b id="endTc">00:00:00</b></span>
+      <span class="stat savednote" id="savedNote"></span>
+    </div>
+  </section>
+</main>
+
+<input type="file" id="fileVideo" class="filehidden" accept="video/*">
+<input type="file" id="fileProj" class="filehidden" accept=".json,application/json">
+
+<div class="overlay" id="docxOverlay">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-h"><span data-i18n="dx.h"></span> <span style="color:var(--muted-2);font-weight:400" data-i18n="dx.hsub"></span></div>
+    <p class="modal-sub" data-i18n="dx.sub"></p>
+    <div class="presets">
+      <button class="preset" data-preset="sprecher" data-i18n="dx.presetNarrator"></button>
+      <button class="preset" data-preset="redaktion" data-i18n="dx.presetEditors"></button>
+      <button class="preset" data-preset="all" data-i18n="dx.presetAll"></button>
+    </div>
+    <div class="cols">
+      <label class="ck"><input type="checkbox" id="ck_tc" checked> <span data-i18n="dx.tc"></span></label>
+      <label class="ck"><input type="checkbox" id="ck_text" checked> <span data-i18n="dx.text"></span></label>
+      <label class="ck"><input type="checkbox" id="ck_desc" checked> <span data-i18n="dx.desc"></span></label>
+      <label class="ck"><input type="checkbox" id="ck_len" checked> <span data-i18n="dx.len"></span></label>
+    </div>
+    <div class="opts">
+      <label class="ck"><input type="checkbox" id="ck_skipEmpty"> <span data-i18n="dx.skipEmpty"></span></label>
+      <label class="ck"><input type="checkbox" id="ck_total" checked> <span data-i18n="dx.total"></span></label>
+    </div>
+    <div class="modal-f">
+      <button id="docxCancel" class="ghost" data-i18n="dx.cancel"></button>
+      <button id="docxExport" class="primary" data-i18n="dx.export"></button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="bkOverlay">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-h" data-i18n="bk.h"></div>
+    <p class="modal-sub" id="bkSub"></p>
+    <div id="bkList" class="bklist"></div>
+    <p id="bkEmpty" class="modal-sub" style="display:none" data-i18n="bk.empty"></p>
+    <div class="modal-f">
+      <button id="bkClose" class="ghost" data-i18n="bk.close"></button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ==================== i18n ====================
+   Two independent languages:
+   - uiLang   : language of the interface        (stored in localStorage, a user preference)
+   - textLang : language of the narration text   (stored in the project file, a document property)
+                controls spellchecking of the text fields and the labels of the exports
+   Missing keys fall back to English. Language packs must live inside this file:
+   a file:// page cannot fetch external JSON (CORS). */
+
+const LOCALE={de:"de-DE",en:"en-GB",fr:"fr-FR",nl:"nl-NL",es:"es-ES",it:"it-IT"};
+const AUTONYM={de:"Deutsch",en:"English",fr:"Français",nl:"Nederlands",es:"Español",it:"Italiano"};
+
+/* Labels of the exported documents – follow the TEXT language, not the interface. */
+const EXP={
+  de:{tc:"Timecode",text:"Text",desc:"Sequenzbeschreibung",len:"Länge",total:"Gesamtlänge"},
+  en:{tc:"Timecode",text:"Text",desc:"Sequence description",len:"Length",total:"Total length"},
+  fr:{tc:"Timecode",text:"Texte",desc:"Description de séquence",len:"Durée",total:"Durée totale"},
+  nl:{tc:"Timecode",text:"Tekst",desc:"Beeldbeschrijving",len:"Lengte",total:"Totale lengte"},
+  es:{tc:"Código de tiempo",text:"Texto",desc:"Descripción de secuencia",len:"Duración",total:"Duración total"},
+  it:{tc:"Timecode",text:"Testo",desc:"Descrizione sequenza",len:"Durata",total:"Durata totale"}
+};
+
+const I18N={
+en:{
+  "app.sub":"TV script writing with auto timecode · © 2026 Ulf Marquardt",
+  "field.title":"Film title / project",
+  "ph.title":"e.g. Coral Reef – Broadcast Version",
+  "field.offset":"Start timecode",
+  "tt.offset":"Timecode of the film's first frame, e.g. 00:00:00 or 10:00:00. The video position is shown and stamped relative to this value.",
+  "tt.lead":"Lead-in: row 1 starts this far into the film. Click to remove it (row 1 back to the film start).",
+  "lead.badge":"+{tc}",
+  "field.format":"Format",
+  "fmt.b":"B", "fmt.i":"I", "fmt.u":"U",
+  "tt.bold":"Bold selected text (Ctrl+B)",
+  "tt.italic":"Italicize selected text (Ctrl+I)",
+  "tt.underline":"Underline selected text (Ctrl+U)",
+  "field.columns":"Columns",
+  "tt.descHide":"Hide the “Sequence description” column – more room for the narration text (Alt+Shift+D). Nothing is lost: the descriptions stay in the file and in the exports.",
+  "tt.descShow":"Show the “Sequence description” column again (Alt+Shift+D)",
+  "msg.descHidden":"Sequence description hidden",
+  "msg.descShown":"Sequence description shown",
+  "btn.new":"New",
+  "btn.open":"Open…",
+  "btn.backups":"Backups…",
+  "tt.backups":"View and restore automatic backups",
+  "btn.save":"Save",
+  "btn.saveAs":"Save As…",
+  "tt.saveAs":"Save under a new name / to a different location",
+  "btn.docx":"Word .docx",
+  "btn.csv":"CSV",
+  "btn.srt":"SRT",
+  "btn.print":"Print / PDF",
+  "btn.kofi":"☕ Buy me a coffee",
+  "tt.kofi":"Buy the developer a coffee",
+
+  "v.film":"Film",
+  "v.swap":"Change film…",
+  "v.swapTip":"Load a different version of the film – timecodes and text stay untouched",
+  "v.choose":"Choose a video file",
+  "v.local":"(stays local – no upload)",
+  "v.formats":"MP4 · MOV · WebM",
+  "v.back5":"« 5 s",
+  "v.play":"Play / Pause",
+  "v.fwd5":"5 s »",
+  "tt.vresizer":"Drag to resize the video panel (double-click: default width)",
+  "hint.html":`<b style="color:var(--muted)">Writing to picture – no mouse needed:</b><br>
+      Let the film run and press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> at the <b>start</b> of every new narration passage: a new row opens, already stamped with the current video position, cursor inside. Then type.<br>
+      <kbd>Ctrl</kbd>+<kbd>Enter</kbd> corrects the start of the current row afterwards.<br>
+      <kbd>Alt</kbd>+<kbd>Enter</kbd> play/pause · <kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd> ±5&nbsp;s (even while typing).<br>
+      Outside the input fields also: <kbd>Space</kbd> play/pause, <kbd>←</kbd> <kbd>→</kbd> ±5&nbsp;s.
+      Clicking a <span style="font-family:var(--mono);color:var(--accent)">timecode</span> jumps the video there; <span style="color:var(--accent)">◉</span> marks the start with the mouse.`,
+
+  "th.tc":"Timecode",
+  "th.text":"Text",
+  "th.desc":"Sequence description",
+  "th.len":"Length",
+  "foot.end":"End",
+  "foot.total":"Total length (sum of the “Length” column)",
+  "btn.addRow":"+ Append row",
+  "stat.rows":"rows",
+  "stat.withText":"with text",
+  "stat.endTime":"end time",
+
+  "tt.tcIn":"Start of this row – freely editable (hh:mm:ss). Changes the length of the row above.",
+  "tt.tcIn1":"Start of the first row – freely editable (hh:mm:ss). Anything later than the start timecode becomes the lead-in.",
+  "tt.seek":"Jump the video to this position",
+  "tt.lenIn":"Length of this sequence – enter as seconds, m:ss or h:mm:ss",
+  "tt.stamp":"Set the start of this block to the current video position (Ctrl+Enter)",
+  "tt.up":"move up",
+  "tt.down":"move down",
+  "tt.insert":"insert row below (last row: starts at the current video position)",
+  "tt.del":"delete row",
+  "ph.text":"Narration text …",
+  "ph.broll":"(footage without narration)",
+  "ph.desc":"What's on screen …",
+
+  "seed.opening":"Opening titles (ambience)",
+  "seed.text":"A narration text starts here …",
+  "seed.wide":"Opening, wide shot of the reef",
+  "seed.broll":"Footage without narration",
+
+  "msg.selectText":"Click into a text field and select some text first",
+  "msg.tcBefore":"Timecode must not be before row {n} ({tc})",
+  "msg.tcBeforeFilm":"Timecode must not be before the start of the film ({tc})",
+  "msg.tcOutside":"This timecode lies outside the loaded film ({from} – {to})",
+  "msg.leadCleared":"Lead-in removed – row 1 starts at the beginning of the film",
+  "msg.noVideo":"Choose a video file first",
+  "msg.selectRow":"Select a row first (click into Text/Description)",
+  "msg.startRow1":"Start (row 1) at {tc}",
+  "msg.rowStarts":"Row {n} starts at {tc}",
+  "msg.saved":"Saved: {name}",
+  "msg.opened":"Opened: {name}",
+  "msg.readFail":"Could not read the file",
+  "msg.confirmNew":"Discard unsaved changes and start over?",
+  "msg.confirmRestore":"Replace current unsaved changes with this backup?",
+  "msg.selectColumn":"Select at least one column",
+  "msg.docxDone":"Word file exported: {name}",
+  "msg.csvDone":"CSV exported",
+  "msg.noText":"No rows with text",
+  "msg.srtDone":"{cues} subtitles from {blocks} text blocks: {name}",
+  "msg.backupRestored":"Backup from {stamp} restored",
+  "msg.autosaved":"Auto-saved {time}",
+  "msg.uiLangSet":"Interface: English",
+  "msg.textLangSet":"Script language: {lang}",
+  "fp.desc":"Filmtext-o-Mat project",
+
+  "vr.remembered":"This project's film:",
+  "vr.show":"▶ Show film",
+  "vr.choose":"Choose file…",
+  "msg.videoRestored":"Film loaded: {name}",
+  "msg.videoSwapped":"New version: {name}",
+  "msg.videoResumed":"New version: {name} – stayed at {tc}",
+  "msg.videoMissing":"“{name}” was not found – moved or renamed? Please choose the file manually.",
+
+  "verr.head":"Unfortunately, the browser cannot play this video file{name}.",
+  "verr.body":"Please try a different copy – <b>MP4 files</b> work most reliably. If in doubt, contact the person who sent you the file.",
+  "verr.reselect":"Choose another file",
+
+  "bk.h":"Automatic backups",
+  "bk.subStartup":"Automatic backups were found. Restore a snapshot – or continue without restoring. Nothing is deleted either way.",
+  "bk.subNormal":"The most recent automatically saved snapshots. Restoring replaces the current content.",
+  "bk.continue":"Continue without restoring",
+  "bk.close":"Close",
+  "bk.empty":"No backups yet. As soon as you start typing, your work is backed up automatically.",
+  "bk.restore":"Restore",
+  "bk.untitled":"(untitled)",
+  "bk.meta":"{stamp} · {rows} rows · {withText} with text",
+
+  "dx.h":"Word export",
+  "dx.hsub":"(.docx)",
+  "dx.sub":"Which columns should be included? Pick a preset or tick them individually.",
+  "dx.presetNarrator":"For narrator",
+  "dx.presetEditors":"For editors",
+  "dx.presetAll":"All columns",
+  "dx.tc":"Timecode",
+  "dx.text":"Text",
+  "dx.desc":"Description",
+  "dx.len":"Length",
+  "dx.skipEmpty":"Skip rows without text",
+  "dx.total":"Append total length",
+  "dx.cancel":"Cancel",
+  "dx.export":"Export"
+},
+de:{
+  "app.sub":"Filmtexte schreiben mit automatischem Timecode · © 2026 Ulf Marquardt",
+  "field.title":"Filmtitel / Projekt",
+  "ph.title":"z. B. Korallenriff – Sendefassung",
+  "field.offset":"Start-Timecode",
+  "tt.offset":"Timecode des ersten Filmbildes, z. B. 00:00:00 oder 10:00:00. Die Videoposition wird relativ dazu angezeigt und gestempelt.",
+  "tt.lead":"Vorlauf: Zeile 1 beginnt so weit nach Filmbeginn. Klicken, um ihn zu entfernen (Zeile 1 zurück auf Filmbeginn).",
+  "lead.badge":"+{tc}",
+  "field.format":"Format",
+  "fmt.b":"F", "fmt.i":"K", "fmt.u":"U",
+  "tt.bold":"Markierten Text fett (Strg+B)",
+  "tt.italic":"Markierten Text kursiv (Strg+I)",
+  "tt.underline":"Markierten Text unterstreichen (Strg+U)",
+  "field.columns":"Spalten",
+  "tt.descHide":"Spalte „Sequenzbeschreibung“ ausblenden – mehr Platz für den Sprechertext (Alt+Umschalt+D). Es geht nichts verloren: Die Beschreibungen bleiben in der Datei und in den Exporten.",
+  "tt.descShow":"Spalte „Sequenzbeschreibung“ wieder einblenden (Alt+Umschalt+D)",
+  "msg.descHidden":"Sequenzbeschreibung ausgeblendet",
+  "msg.descShown":"Sequenzbeschreibung eingeblendet",
+  "btn.new":"Neu",
+  "btn.open":"Öffnen…",
+  "btn.backups":"Sicherungen…",
+  "tt.backups":"Automatische Sicherungen ansehen und wiederherstellen",
+  "btn.save":"Speichern",
+  "btn.saveAs":"Speichern unter…",
+  "tt.saveAs":"Unter neuem Namen / an anderem Ort speichern",
+  "btn.docx":"Word .docx",
+  "btn.csv":"CSV",
+  "btn.srt":"SRT",
+  "btn.print":"Drucken / PDF",
+  "btn.kofi":"☕ Kaffee spendieren",
+  "tt.kofi":"Dem Entwickler einen Kaffee spendieren",
+
+  "v.film":"Film",
+  "v.swap":"Film wechseln…",
+  "v.swapTip":"Andere Fassung des Films laden – Timecodes und Text bleiben unverändert",
+  "v.choose":"Videodatei wählen",
+  "v.local":"(bleibt lokal – kein Upload)",
+  "v.formats":"MP4 · MOV · WebM",
+  "v.back5":"« 5 s",
+  "v.play":"Abspielen / Pause",
+  "v.fwd5":"5 s »",
+  "tt.vresizer":"Ziehen, um den Videobereich zu verbreitern (Doppelklick: Standardbreite)",
+  "hint.html":`<b style="color:var(--muted)">Schreiben zum Bild – ohne Maus:</b><br>
+      Film laufen lassen und am <b>Beginn</b> jeder neuen Textpassage <kbd>Strg</kbd>+<kbd>Umschalt</kbd>+<kbd>Enter</kbd> drücken: Es öffnet sich eine neue Zeile, bereits auf die aktuelle Videoposition gestempelt, der Cursor steht darin. Dann tippen.<br>
+      <kbd>Strg</kbd>+<kbd>Enter</kbd> korrigiert nachträglich den Beginn der aktuellen Zeile.<br>
+      <kbd>Alt</kbd>+<kbd>Enter</kbd> Abspielen/Pause · <kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd> ±5&nbsp;s (auch während des Tippens).<br>
+      Außerhalb der Eingabefelder außerdem: <kbd>Leertaste</kbd> Abspielen/Pause, <kbd>←</kbd> <kbd>→</kbd> ±5&nbsp;s.
+      Ein Klick auf einen <span style="font-family:var(--mono);color:var(--accent)">Timecode</span> springt das Video dorthin; <span style="color:var(--accent)">◉</span> setzt den Beginn mit der Maus.`,
+
+  "th.tc":"Timecode",
+  "th.text":"Text",
+  "th.desc":"Sequenzbeschreibung",
+  "th.len":"Länge",
+  "foot.end":"Ende",
+  "foot.total":"Gesamtlänge (Summe der Spalte „Länge“)",
+  "btn.addRow":"+ Zeile anhängen",
+  "stat.rows":"Zeilen",
+  "stat.withText":"mit Text",
+  "stat.endTime":"Endzeit",
+
+  "tt.tcIn":"Beginn dieser Zeile – frei editierbar (hh:mm:ss). Ändert die Länge der Zeile darüber.",
+  "tt.tcIn1":"Beginn der ersten Zeile – frei editierbar (hh:mm:ss). Was später als der Start-Timecode liegt, wird zum Vorlauf.",
+  "tt.seek":"Video an diese Stelle springen",
+  "tt.lenIn":"Länge dieser Sequenz – Eingabe als Sekunden, m:ss oder h:mm:ss",
+  "tt.stamp":"Beginn dieses Blocks auf die aktuelle Videoposition setzen (Strg+Enter)",
+  "tt.up":"nach oben",
+  "tt.down":"nach unten",
+  "tt.insert":"Zeile darunter einfügen (letzte Zeile: beginnt an der aktuellen Videoposition)",
+  "tt.del":"Zeile löschen",
+  "ph.text":"Sprechertext …",
+  "ph.broll":"(Bilder ohne Text)",
+  "ph.desc":"Was im Bild zu sehen ist …",
+
+  "seed.opening":"Vorspann (Atmo)",
+  "seed.text":"Hier beginnt ein Sprechertext …",
+  "seed.wide":"Auftakt, Totale auf das Riff",
+  "seed.broll":"Bilder ohne Text",
+
+  "msg.selectText":"Erst in ein Textfeld klicken und Text markieren",
+  "msg.tcBefore":"Timecode darf nicht vor Zeile {n} liegen ({tc})",
+  "msg.tcBeforeFilm":"Timecode darf nicht vor Filmbeginn liegen ({tc})",
+  "msg.tcOutside":"Dieser Timecode liegt außerhalb des geladenen Films ({from} – {to})",
+  "msg.leadCleared":"Vorlauf entfernt – Zeile 1 beginnt am Filmanfang",
+  "msg.noVideo":"Zuerst eine Videodatei wählen",
+  "msg.selectRow":"Zuerst eine Zeile wählen (in Text/Beschreibung klicken)",
+  "msg.startRow1":"Beginn (Zeile 1) bei {tc}",
+  "msg.rowStarts":"Zeile {n} beginnt bei {tc}",
+  "msg.saved":"Gespeichert: {name}",
+  "msg.opened":"Geöffnet: {name}",
+  "msg.readFail":"Datei konnte nicht gelesen werden",
+  "msg.confirmNew":"Ungespeicherte Änderungen verwerfen und neu beginnen?",
+  "msg.confirmRestore":"Aktuelle ungespeicherte Änderungen durch diese Sicherung ersetzen?",
+  "msg.selectColumn":"Mindestens eine Spalte auswählen",
+  "msg.docxDone":"Word-Datei exportiert: {name}",
+  "msg.csvDone":"CSV exportiert",
+  "msg.noText":"Keine Zeilen mit Text",
+  "msg.srtDone":"{cues} Untertitel aus {blocks} Textblöcken: {name}",
+  "msg.backupRestored":"Sicherung von {stamp} wiederhergestellt",
+  "msg.autosaved":"Automatisch gesichert {time}",
+  "msg.uiLangSet":"Oberfläche: Deutsch",
+  "msg.textLangSet":"Textsprache: {lang}",
+  "fp.desc":"Filmtext-o-Mat-Projekt",
+
+  "vr.remembered":"Film dieses Projekts:",
+  "vr.show":"▶ Film anzeigen",
+  "vr.choose":"Datei wählen…",
+  "msg.videoRestored":"Film geladen: {name}",
+  "msg.videoSwapped":"Neue Fassung: {name}",
+  "msg.videoResumed":"Neue Fassung: {name} – Position {tc} beibehalten",
+  "msg.videoMissing":"„{name}“ wurde nicht gefunden – verschoben oder umbenannt? Bitte die Datei manuell wählen.",
+
+  "verr.head":"Der Browser kann diese Videodatei leider nicht abspielen{name}.",
+  "verr.body":"Bitte eine andere Kopie versuchen – <b>MP4-Dateien</b> funktionieren am zuverlässigsten. Im Zweifel bei der Person nachfragen, die die Datei geschickt hat.",
+  "verr.reselect":"Andere Datei wählen",
+
+  "bk.h":"Automatische Sicherungen",
+  "bk.subStartup":"Es wurden automatische Sicherungen gefunden. Einen Stand wiederherstellen – oder ohne Wiederherstellung fortfahren. Gelöscht wird in beiden Fällen nichts.",
+  "bk.subNormal":"Die zuletzt automatisch gesicherten Stände. Beim Wiederherstellen wird der aktuelle Inhalt ersetzt.",
+  "bk.continue":"Ohne Wiederherstellen fortfahren",
+  "bk.close":"Schließen",
+  "bk.empty":"Noch keine Sicherungen. Sobald du zu tippen beginnst, wird deine Arbeit automatisch gesichert.",
+  "bk.restore":"Wiederherstellen",
+  "bk.untitled":"(ohne Titel)",
+  "bk.meta":"{stamp} · {rows} Zeilen · {withText} mit Text",
+
+  "dx.h":"Word-Export",
+  "dx.hsub":"(.docx)",
+  "dx.sub":"Welche Spalten sollen enthalten sein? Voreinstellung wählen oder einzeln ankreuzen.",
+  "dx.presetNarrator":"Für Sprecher",
+  "dx.presetEditors":"Für Redaktion",
+  "dx.presetAll":"Alle Spalten",
+  "dx.tc":"Timecode",
+  "dx.text":"Text",
+  "dx.desc":"Beschreibung",
+  "dx.len":"Länge",
+  "dx.skipEmpty":"Zeilen ohne Text überspringen",
+  "dx.total":"Gesamtlänge anhängen",
+  "dx.cancel":"Abbrechen",
+  "dx.export":"Exportieren"
+}
+};
+
+const UILANG_KEY="filmtext-o-mat:uiLang";
+let uiLang=(function(){
+  try{ const s=localStorage.getItem(UILANG_KEY); if(s && I18N[s]) return s; }catch(err){}
+  const n=(navigator.language||"en").slice(0,2).toLowerCase();
+  return I18N[n]?n:"en";
+})();
+let textLang=uiLang;   // document property; overwritten when a project is opened
+
+function t(key,params){
+  let s=(I18N[uiLang] && I18N[uiLang][key]);
+  if(s===undefined) s=I18N.en[key];
+  if(s===undefined) return key;                 // never crash on a missing key
+  if(params) s=s.replace(/\{(\w+)\}/g,(m,k)=>(params[k]!==undefined?params[k]:m));
+  return s;
+}
+function xp(key){ return (EXP[textLang]||EXP.en)[key]; }   // export label, text language
+
+function applyI18n(){
+  document.documentElement.lang=uiLang;
+  document.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent=t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-html]").forEach(el=>{ el.innerHTML=t(el.dataset.i18nHtml); });
+  document.querySelectorAll("[data-i18n-title]").forEach(el=>{ el.title=t(el.dataset.i18nTitle); });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el=>{ el.placeholder=t(el.dataset.i18nPh); });
+  const bs=document.getElementById("bkSub");
+  if(bs && bkOverlay.classList.contains("show")) bs.textContent=t(bkOverlay.dataset.startup==="1"?"bk.subStartup":"bk.subNormal");
+  syncDescBtn();   // its tooltip depends on the state, so it can't be a static data-i18n-title
+}
+function applyTextLang(){
+  const loc=LOCALE[textLang]||"en-GB";
+  elRows.setAttribute("lang",loc);
+  projTitle.setAttribute("lang",loc);
+  projTitle.setAttribute("spellcheck","true");
+  /* Stamp every field that is already on screen (render() stamps new ones) and
+     re-toggle spellcheck: flipping the attribute off and on makes the browser
+     re-evaluate the text immediately instead of waiting for the next edit. */
+  const fields=document.querySelectorAll(".ta");
+  fields.forEach(el=>{ el.setAttribute("lang",loc); el.setAttribute("spellcheck","false"); });
+  requestAnimationFrame(()=>{ fields.forEach(el=>el.setAttribute("spellcheck","true")); });
+}
+
+
+/* ---------- Timecode helpers ---------- */
+function parseToSeconds(input){
+  if(input===null||input===undefined) return 0;
+  let s=String(input).trim();
+  if(s==="") return 0;
+  let neg=false;
+  if(s[0]==="-"){neg=true;s=s.slice(1);}
+  const parts=s.split(":").map(p=>p.trim());
+  let sec=0;
+  if(parts.length===1){ sec=parseFloat(parts[0])||0; }
+  else if(parts.length===2){ sec=(parseInt(parts[0],10)||0)*60+(parseFloat(parts[1])||0); }
+  else { sec=(parseInt(parts[0],10)||0)*3600+(parseInt(parts[1],10)||0)*60+(parseFloat(parts[2])||0); }
+  sec=Math.round(sec);
+  return neg?-sec:sec;
+}
+function fmtFull(total){ // hh:mm:ss
+  total=Math.round(total||0);
+  const sign=total<0?"-":""; total=Math.abs(total);
+  const h=Math.floor(total/3600), m=Math.floor((total%3600)/60), s=total%60;
+  const p=n=>String(n).padStart(2,"0");
+  return sign+p(h)+":"+p(m)+":"+p(s);
+}
+function fmtLen(total){ // compact: m:ss, from 1 h h:mm:ss
+  total=Math.round(total||0);
+  const sign=total<0?"-":""; total=Math.abs(total);
+  const h=Math.floor(total/3600), m=Math.floor((total%3600)/60), s=total%60;
+  const p=n=>String(n).padStart(2,"0");
+  if(h>0) return sign+h+":"+p(m)+":"+p(s);
+  return sign+m+":"+p(s);
+}
+
+/* ---------- Formatting: allowed are bold/italic/underline + line break ---------- */
+function escHtml(s){
+  return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\r?\n/g,"<br>");
+}
+// Boil arbitrary HTML (e.g. from the clipboard) down to <b> <i> <u> <br>
+function sanitizeHtml(html){
+  const tpl=document.createElement("template");
+  tpl.innerHTML=String(html==null?"":html);
+  let out="";
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const BLOCK=/^(DIV|P|LI|UL|OL|H[1-6]|TR|TABLE|SECTION|ARTICLE|BLOCKQUOTE|PRE|FIGURE)$/;
+  (function walk(node){
+    for(const n of node.childNodes){
+      if(n.nodeType===3){ out+=esc(n.nodeValue); continue; }
+      if(n.nodeType!==1) continue;
+      const tag=n.tagName;
+      if(tag==="BR"){ out+="<br>"; continue; }
+      if(tag==="STYLE"||tag==="SCRIPT"||tag==="HEAD"||tag==="META"||tag==="TITLE") continue;
+      let open="",close="";
+      if(tag==="B"||tag==="STRONG"){ open="<b>"; close="</b>"; }
+      else if(tag==="I"||tag==="EM"){ open="<i>"; close="</i>"; }
+      else if(tag==="U"){ open="<u>"; close="</u>"; }
+      if(BLOCK.test(tag) && out!=="" && !out.endsWith("<br>")) out+="<br>";
+      out+=open; walk(n); out+=close;
+    }
+  })(tpl.content);
+  return out;
+}
+function htmlToPlain(html){
+  const tpl=document.createElement("template");
+  tpl.innerHTML=sanitizeHtml(html);
+  let out="";
+  (function walk(node){
+    for(const n of node.childNodes){
+      if(n.nodeType===3){ out+=n.nodeValue; continue; }
+      if(n.nodeType!==1) continue;
+      if(n.tagName==="BR"){ out+="\n"; continue; }
+      walk(n);
+    }
+  })(tpl.content);
+  return out;
+}
+function htmlToRuns(html){ // lines of segments {t,b,i,u} – for the Word export
+  const tpl=document.createElement("template");
+  tpl.innerHTML=sanitizeHtml(html);
+  const lines=[[]];
+  (function walk(node,f){
+    for(const n of node.childNodes){
+      if(n.nodeType===3){
+        // V2.955: Chromium's insertLineBreak writes a bare "\n" into pre-wrap fields instead of <br> –
+        // treat it as a paragraph break too, otherwise Word runs both paragraphs together
+        n.nodeValue.split(/\r?\n/).forEach((part,k)=>{
+          if(k>0) lines.push([]);
+          if(part) lines[lines.length-1].push({t:part,b:f.b,i:f.i,u:f.u});
+        });
+        continue;
+      }
+      if(n.nodeType!==1) continue;
+      if(n.tagName==="BR"){ lines.push([]); continue; }
+      walk(n,{b:f.b||n.tagName==="B", i:f.i||n.tagName==="I", u:f.u||n.tagName==="U"});
+    }
+  })(tpl.content,{b:false,i:false,u:false});
+  while(lines.length>1 && lines[lines.length-1].length===0) lines.pop();
+  return lines;
+}
+
+/* ---------- State ---------- */
+let state = {
+  title:"",
+  offset:0,            // seconds – timecode of the FIRST FRAME of the film (video position 0)
+  lead:0,              // seconds – gap between the start of the film and row 1 (usually 0)
+  rows:[],             // {id, text, desc, len, broll}
+  videoName:""         // file name of this project's film (document property, saved in the JSON)
+};
+let uid = 1;
+let pristine = true;   // true = untouched example project (may be re-seeded on language switch)
+function newRow(o){
+  const r=Object.assign({id:uid++, text:"", desc:"", len:0, broll:false}, o||{});
+  r.textF=(r.textF==null)?escHtml(r.text):sanitizeHtml(r.textF);
+  r.descF=(r.descF==null)?escHtml(r.desc):sanitizeHtml(r.descF);
+  r.text=htmlToPlain(r.textF);
+  r.desc=htmlToPlain(r.descF);
+  return r;
+}
+
+function seed(){
+  state.title="";
+  state.offset=0;
+  state.lead=0;
+  state.rows=[
+    newRow({text:"", desc:t("seed.opening"), len:8, broll:true}),
+    newRow({text:t("seed.text"), desc:t("seed.wide"), len:12}),
+    newRow({text:"", desc:t("seed.broll"), len:6, broll:true})
+  ];
+  // if a film is already on screen, the fresh project adopts it; otherwise none
+  state.videoName=videoReady ? (currentVideoName||"") : "";  // seed() only runs after the video section is initialised
+  pristine=true;
+}
+
+/* ---------- Rendering ---------- */
+const elRows = document.getElementById("rows");
+
+/* ---------- Video position  ↔  script timecode ----------
+   Two different clocks: the <video> element always counts from 0, while the script
+   runs on the film's own timecode. state.offset is the timecode of the first frame,
+   so the two axes differ by exactly that amount – every stamp and every seek has to
+   convert, otherwise a start timecode of 10:00:00 makes each stamp land "before row 1".
+   state.lead is the distance between the start of the film and row 1 (normally 0). */
+function videoToTc(pos){ return state.offset + Math.max(0, pos||0); }
+function tcToVideo(tc){ return (tc||0) - state.offset; }
+function scriptStartSeconds(){ return state.offset + Math.max(0, state.lead||0); }
+
+function rowStartSeconds(index){
+  let acc = scriptStartSeconds();
+  for(let i=0;i<index;i++) acc += (state.rows[i].len||0);
+  return acc;
+}
+function totalLength(){ return state.rows.reduce((a,r)=>a+(r.len||0),0); }
+
+function render(){
+  elRows.innerHTML="";
+  state.rows.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    if(r.broll) tr.classList.add("broll");
+    tr.dataset.id=r.id;
+    const rid=r.id;
+    const start=rowStartSeconds(i);
+
+    // # / anchor
+    const tdNum=document.createElement("td");
+    tdNum.className="num"; tdNum.textContent=(i+1);
+    tr.appendChild(tdNum);
+
+    // Timecode (editable; the jump button seeks the video here)
+    const tdTc=document.createElement("td");
+    tdTc.className="tc";
+    const inTc=document.createElement("input");
+    inTc.type="text"; inTc.className="tc-in"; inTc.value=fmtFull(start);
+    inTc.title=(i===0 ? t("tt.tcIn1") : t("tt.tcIn"));
+    inTc.addEventListener("focus",()=>inTc.select());
+    inTc.addEventListener("change",()=>{
+      const k=rowIndexById(rid);
+      setRowStart(k, parseToSeconds(inTc.value));
+      inTc.value=fmtFull(rowStartSeconds(k)); // normalize / reset
+    });
+    inTc.addEventListener("keydown",e=>{ if(e.key==="Enter"){ inTc.blur(); }});
+    const seekBtn=document.createElement("button");
+    seekBtn.className="seek-btn"; seekBtn.textContent="↦"; seekBtn.title=t("tt.seek");
+    seekBtn.addEventListener("click",()=>{ const k=rowIndexById(rid); if(k>=0) seekTo(rowStartSeconds(k)); });
+    const stampBtn=document.createElement("button");
+    stampBtn.className="seek-btn"; stampBtn.textContent="◉"; stampBtn.title=t("tt.stamp");
+    stampBtn.addEventListener("click",()=>{ const k=rowIndexById(rid); if(k>=0) markStart(k); });
+    tdTc.appendChild(inTc); tdTc.appendChild(seekBtn); tdTc.appendChild(stampBtn);
+    tr.appendChild(tdTc);
+
+    // Text (formattable: bold / italic / underline)
+    const tdText=document.createElement("td");
+    const taText=mkEditable(r.textF, r.broll?t("ph.broll"):t("ph.text"));
+    taText.addEventListener("input",()=>{ r.textF=sanitizeHtml(taText.innerHTML); r.text=htmlToPlain(r.textF); markDirty(); updateStats(); });
+    tdText.appendChild(taText);
+    tr.appendChild(tdText);
+
+    // Description (also formattable) – hideable column, see applyDescCol()
+    const tdDesc=document.createElement("td");
+    tdDesc.className="c-desc";
+    const taDesc=mkEditable(r.descF,t("ph.desc"),"desc");
+    taDesc.addEventListener("input",()=>{ r.descF=sanitizeHtml(taDesc.innerHTML); r.desc=htmlToPlain(r.descF); markDirty(); });
+    tdDesc.appendChild(taDesc);
+    tr.appendChild(tdDesc);
+
+    // Length
+    const tdLen=document.createElement("td");
+    const inLen=document.createElement("input");
+    inLen.type="text"; inLen.className="len-in"; inLen.value=fmtLen(r.len);
+    inLen.title=t("tt.lenIn");
+    inLen.addEventListener("focus",()=>inLen.select());
+    inLen.addEventListener("change",()=>{
+      r.len=Math.max(0,parseToSeconds(inLen.value));
+      inLen.value=fmtLen(r.len);
+      markDirty(); refreshTimecodes(); // restack timecodes, position stays
+    });
+    inLen.addEventListener("keydown",e=>{ if(e.key==="Enter"){ inLen.blur(); }});
+    tdLen.appendChild(inLen);
+    tr.appendChild(tdLen);
+
+    // Actions
+    const tdAct=document.createElement("td"); tdAct.className="act";
+    const wrap=document.createElement("div"); wrap.className="rowbtns";
+    wrap.appendChild(icon("↦","seek",t("tt.seek"),()=>{ const k=rowIndexById(rid); if(k>=0) seekTo(rowStartSeconds(k)); }));
+    wrap.appendChild(icon("◉","stamp",t("tt.stamp"),()=>{ const k=rowIndexById(rid); if(k>=0) markStart(k); }));
+    wrap.appendChild(icon("↑","",t("tt.up"),()=>move(i,-1)));
+    wrap.appendChild(icon("↓","",t("tt.down"),()=>move(i,1)));
+    wrap.appendChild(icon("+","",t("tt.insert"),()=>insertAt(i+1,true)));
+    wrap.appendChild(icon("×","del",t("tt.del"),()=>removeAt(i)));
+    tdAct.appendChild(wrap);
+    tr.appendChild(tdAct);
+
+    elRows.appendChild(tr);
+  });
+  document.getElementById("totalLen").textContent=fmtFull(totalLength());
+  syncLeadBadge();
+  updateStats();
+  requestAnimationFrame(resizeAllTextareas); // ensure heights after layout
+}
+
+function mkEditable(html,ph,extraClass){
+  const el=document.createElement("div");
+  el.className="ta"+(extraClass?" "+extraClass:"");
+  el.contentEditable="true";
+  /* Explicit attributes on the field itself, not only inherited from the tbody:
+     Firefox chooses its dictionary from the nearest lang attribute, and a browser
+     that finds no matching dictionary shows no squiggles at all – see V2.94 note. */
+  el.setAttribute("spellcheck","true");
+  el.setAttribute("lang", LOCALE[textLang]||"en-GB");
+  el.setAttribute("data-ph",ph||"");
+  el.innerHTML=sanitizeHtml(html||"");
+  el.addEventListener("keydown",e=>{
+    const isEnter=(e.key==="Enter"||e.code==="Enter"||e.code==="NumpadEnter");
+    if(isEnter && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey){
+      e.preventDefault();
+      try{ document.execCommand("insertLineBreak"); }
+      catch(err){ document.execCommand("insertHTML",false,"<br>"); }
+      return;
+    }
+    if((e.ctrlKey||e.metaKey) && !e.altKey && !e.shiftKey){
+      const k=(e.key||"").toLowerCase();
+      if(k==="b"){ e.preventDefault(); applyFmt("bold"); return; }
+      if(k==="i"){ e.preventDefault(); applyFmt("italic"); return; }
+      if(k==="u"){ e.preventDefault(); applyFmt("underline"); return; }
+    }
+  });
+  el.addEventListener("paste",e=>{
+    e.preventDefault();
+    const cd=e.clipboardData;
+    const rich=cd?cd.getData("text/html"):"";
+    if(rich){ document.execCommand("insertHTML",false,sanitizeHtml(rich)); }
+    else{ document.execCommand("insertText",false,cd?cd.getData("text/plain"):""); }
+  });
+  el.addEventListener("input",()=>{ if(el.innerHTML==="<br>") el.innerHTML=""; }); // show placeholder again
+  return el;
+}
+function resizeAllTextareas(){ /* contenteditable adjusts its own height */ }
+
+/* ---------- Formatting buttons (bold / italic / underline) ---------- */
+try{ document.execCommand("styleWithCSS", false, false); }catch(err){}
+function applyFmt(cmd){
+  const el=document.activeElement;
+  if(!el || !el.isContentEditable){ toast(t("msg.selectText")); return; }
+  try{ document.execCommand(cmd, false, null); }catch(err){}
+}
+[["fmtB","bold"],["fmtI","italic"],["fmtU","underline"]].forEach(pair=>{
+  const b=document.getElementById(pair[0]);
+  b.addEventListener("mousedown",e=>e.preventDefault()); // don't lose the selection in the text field
+  b.addEventListener("click",()=>applyFmt(pair[1]));
+});
+function icon(sym,extra,title,fn){
+  const b=document.createElement("button");
+  b.className="ic"+(extra?" "+extra:""); b.textContent=sym; b.title=title;
+  b.addEventListener("click",fn); return b;
+}
+
+/* ---------- Column view: show / hide the sequence description ----------
+   A view preference, not a document property – it lives in localStorage, not in the
+   project file. The descriptions themselves are never touched: they stay in the state,
+   in the JSON, and in the Word/CSV exports. Only the column is taken off the screen
+   (and, since the cells are display:none, off the printout and out of the tab order). */
+const SHOWDESC_KEY="filmtext-o-mat:showDesc";
+let showDesc=(function(){
+  try{ return localStorage.getItem(SHOWDESC_KEY)!=="0"; }catch(err){ return true; }
+})();
+function syncDescBtn(){
+  const b=document.getElementById("btnDesc");
+  if(!b) return;
+  b.setAttribute("aria-pressed", showDesc?"true":"false");
+  b.title=t(showDesc?"tt.descHide":"tt.descShow");
+}
+function applyDescCol(){
+  document.body.classList.toggle("nodesc", !showDesc);
+  // the footer's "total length" label spans Text+Description – shrink it when Description is gone
+  const foot=document.getElementById("footTotalCell");
+  if(foot) foot.colSpan=showDesc?2:1;
+  syncDescBtn();
+}
+function toggleDesc(){
+  showDesc=!showDesc;
+  try{ localStorage.setItem(SHOWDESC_KEY, showDesc?"1":"0"); }catch(err){}
+  applyDescCol();
+  toast(t(showDesc?"msg.descShown":"msg.descHidden"));
+}
+document.getElementById("btnDesc").addEventListener("click",toggleDesc);
+
+/* ---------- Active row + lightweight refresh (without losing focus) ---------- */
+let activeRowId=null;
+function rowIndexById(id){ return state.rows.findIndex(r=>r.id===id); }
+elRows.addEventListener("focusin",e=>{
+  const tr=e.target.closest("tr");
+  if(tr && tr.dataset.id) activeRowId=Number(tr.dataset.id);
+});
+function refreshTimecodes(){
+  Array.from(elRows.children).forEach((tr,i)=>{
+    const tcIn=tr.querySelector(".tc-in");
+    if(tcIn && document.activeElement!==tcIn) tcIn.value=fmtFull(rowStartSeconds(i));
+    const lenIn=tr.querySelector(".len-in");
+    if(lenIn && document.activeElement!==lenIn) lenIn.value=fmtLen(state.rows[i].len);
+  });
+  document.getElementById("totalLen").textContent=fmtFull(totalLength());
+  syncLeadBadge();
+  updateStats();
+}
+/* The badge next to the start timecode only appears while row 1 does NOT sit on the
+   first frame of the film – otherwise that gap would be invisible. */
+function syncLeadBadge(){
+  const b=document.getElementById("leadBadge"); if(!b) return;
+  const lead=Math.max(0, state.lead||0);
+  b.classList.toggle("on", lead>0);
+  if(lead>0) b.textContent=t("lead.badge",{tc:fmtFull(lead)});
+}
+// Set the start of a row (via the length of the row above, or – for row 1 – the lead-in)
+function setRowStart(i, T, quiet){
+  if(i<0||i>=state.rows.length) return false;
+  T=Math.max(0,Math.round(T));
+  if(i===0){
+    // Row 1 cannot start before the film does; the difference becomes the lead-in.
+    if(T<state.offset){
+      if(!quiet) toast(t("msg.tcBeforeFilm",{tc:fmtFull(state.offset)}));
+      return false;
+    }
+    state.lead=T-state.offset;
+  } else {
+    const prevStart=rowStartSeconds(i-1);
+    if(T<prevStart){
+      if(!quiet) toast(t("msg.tcBefore",{n:i,tc:fmtFull(prevStart)}));
+      return false;
+    }
+    state.rows[i-1].len=T-prevStart;
+  }
+  markDirty(); refreshTimecodes(); return true;
+}
+
+/* ---------- Row operations ---------- */
+/* insertAt(i, stampFromVideo)
+   stampFromVideo: if the new row is the LAST one and a video is loaded, its start is set
+   to the current video position (i.e. the length of the row above is set accordingly).
+   Restricted to the last row on purpose: stamping a row in the middle of the script would
+   silently push everything below it to a later time. Fails silently (row keeps length 0)
+   if the playhead sits before the start of the row above. */
+function insertAt(i, stampFromVideo){
+  state.rows.splice(i,0,newRow());
+  if(stampFromVideo && videoReady && i>0 && i===state.rows.length-1){
+    setRowStart(i, videoToTc(video.currentTime), true);
+  }
+  markDirty(); render();
+  focusRow(i);
+}
+function focusRow(i){
+  const tr=elRows.children[i]; if(!tr) return;
+  const ta=tr.querySelector(".ta"); if(!ta) return;
+  ta.focus();
+  const sel=window.getSelection();
+  if(sel){ const rg=document.createRange(); rg.selectNodeContents(ta); rg.collapse(false); sel.removeAllRanges(); sel.addRange(rg); }
+}
+function removeAt(i){ state.rows.splice(i,1); markDirty(); render(); }
+function move(i,dir){
+  const j=i+dir; if(j<0||j>=state.rows.length) return;
+  const [r]=state.rows.splice(i,1); state.rows.splice(j,0,r); markDirty(); render();
+}
+
+/* ---------- Video ---------- */
+const video=document.getElementById("video");
+const vdrop=document.getElementById("vdrop");
+const fileVideo=document.getElementById("fileVideo");
+const btnVSwap=document.getElementById("btnVSwap");
+let videoReady=false;
+/* V2.956: position to keep across a film swap – set by the "Change film…" button only,
+   so a restored or freshly chosen film still starts at its own beginning. */
+let resumeAt=null;
+
+const verror=document.getElementById("verror");
+const vrestore=document.getElementById("vrestore");
+let lastVideoUrl=null;
+let currentVideoName="";   // name of the file that is actually on screen right now
+
+/* --- File handles in IndexedDB (Chrome/Edge, File System Access API) ---
+   A browser page must not silently reopen an arbitrary local file – for good reason.
+   What it MAY do: keep the FileSystemFileHandle it got from a picker/drop, store it
+   in IndexedDB, and reopen the file later after (at most) one permission click.
+   localStorage cannot hold handles; IndexedDB can. */
+const HDL_DB="filmtext-o-mat-handles", HDL_STORE="videoHandles";
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    let rq;
+    try{ rq=indexedDB.open(HDL_DB,1); }catch(err){ rej(err); return; }
+    rq.onupgradeneeded=()=>{ try{ rq.result.createObjectStore(HDL_STORE); }catch(err){} };
+    rq.onsuccess=()=>res(rq.result);
+    rq.onerror=()=>rej(rq.error);
+  });
+}
+async function handlePut(name,h){
+  if(!name||!h) return;
+  try{
+    const db=await idbOpen();
+    await new Promise((res,rej)=>{
+      const tx=db.transaction(HDL_STORE,"readwrite");
+      tx.objectStore(HDL_STORE).put(h,name);
+      tx.oncomplete=res; tx.onerror=()=>rej(tx.error);
+    });
+    db.close();
+  }catch(err){} // no IndexedDB (e.g. some file:// setups) – degrade to name-only
+}
+async function handleGet(name){
+  if(!name) return null;
+  try{
+    const db=await idbOpen();
+    const h=await new Promise((res,rej)=>{
+      const tx=db.transaction(HDL_STORE,"readonly");
+      const rq=tx.objectStore(HDL_STORE).get(name);
+      rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error);
+    });
+    db.close();
+    return h||null;
+  }catch(err){ return null; }
+}
+
+const supportsFSOpen=(typeof window.showOpenFilePicker==="function");
+async function chooseVideo(){
+  if(!supportsFSOpen){ fileVideo.click(); return; }
+  try{
+    const [h]=await window.showOpenFilePicker({
+      id:"ftm-video",   // Chrome remembers the last folder under this id
+      multiple:false,
+      types:[{description:"Video", accept:{"video/*":[".mp4",".m4v",".mov",".webm",".mkv"]}}]
+    });
+    if(!h) return;
+    const f=await h.getFile();
+    handlePut(f.name,h);            // fire and forget
+    loadVideo(f);
+  }catch(err){
+    if(err && err.name==="AbortError"){ resumeAt=null; return; }   // user cancelled
+    fileVideo.click();                            // picker blocked – classic input as fallback
+  }
+}
+/* V2.956: swap the film while working – a new cut, a fresh proxy, a corrected render.
+   The script is untouched: only the film behind the timecodes is exchanged, and the
+   player stays where it was, so the same passage is on screen after the swap. */
+function requestVideoSwap(){
+  resumeAt=(videoReady && isFinite(video.currentTime)) ? video.currentTime : null;
+  chooseVideo();
+}
+btnVSwap.addEventListener("click",requestVideoSwap);
+vdrop.addEventListener("click",chooseVideo);
+fileVideo.addEventListener("change",e=>{
+  const f=e.target.files[0]; if(!f) return; loadVideo(f);
+  e.target.value="";
+});
+;["dragover","drop"].forEach(ev=>{
+  vdrop.addEventListener(ev,e=>{e.preventDefault();});
+});
+vdrop.addEventListener("drop",e=>{
+  // Chrome also hands out a persistable handle for dropped files
+  const it=e.dataTransfer.items && e.dataTransfer.items[0];
+  if(it && typeof it.getAsFileSystemHandle==="function"){
+    try{ it.getAsFileSystemHandle().then(h=>{ if(h && h.kind==="file") handlePut(h.name,h); }).catch(()=>{}); }catch(err){}
+  }
+  const f=e.dataTransfer.files && e.dataTransfer.files[0];
+  if(f) loadVideo(f);
+});
+
+/* Re-attach the project's film after opening a project.
+   - permission still granted (same browser session, or "allow on every visit"):
+     the video simply appears, no click needed.
+   - permission expired (browser was restarted): banner with ONE button; the click
+     lets the browser ask for confirmation and the film is back – no file dialog.
+   - no stored handle (other browser / file chosen via fallback input): banner
+     shows WHICH file belongs to the project, button opens the chooser. */
+function hideVideoRestore(){ vrestore.style.display="none"; vrestore.innerHTML=""; }
+function showVideoRestore(name,h){
+  vrestore.innerHTML="";
+  const lbl=document.createElement("span"); lbl.textContent=t("vr.remembered");
+  const nm=document.createElement("span"); nm.className="vrname"; nm.textContent=name;
+  const btn=document.createElement("button"); btn.className="primary";
+  btn.textContent=h?t("vr.show"):t("vr.choose");
+  btn.addEventListener("click",async ()=>{
+    if(!h){ chooseVideo(); return; }
+    try{
+      if(typeof h.requestPermission==="function"){
+        const p=await h.requestPermission({mode:"read"});
+        if(p!=="granted") return;             // declined – banner stays
+      }
+      const f=await h.getFile();
+      loadVideo(f,{restored:true});
+      toast(t("msg.videoRestored",{name:f.name}));
+    }catch(err){
+      // file moved, renamed or on an unplugged drive
+      toast(t("msg.videoMissing",{name:name}));
+      showVideoRestore(name,null);            // fall back to a plain chooser button
+    }
+  });
+  vrestore.appendChild(lbl); vrestore.appendChild(nm); vrestore.appendChild(btn);
+  vrestore.style.display="flex";
+}
+async function tryRestoreVideo(){
+  hideVideoRestore();
+  resumeAt=null;            // V2.956: a restored film starts at its own beginning
+  const name=state.videoName;
+  if(!name) return;
+  if(videoReady && currentVideoName===name) return;   // right film already on screen
+  const h=await handleGet(name);
+  if(h && typeof h.queryPermission==="function"){
+    try{
+      if((await h.queryPermission({mode:"read"}))==="granted"){
+        const f=await h.getFile();
+        loadVideo(f,{restored:true});
+        toast(t("msg.videoRestored",{name:f.name}));
+        return;
+      }
+    }catch(err){} // fall through to the banner
+  }
+  showVideoRestore(name,h);
+}
+
+function loadVideo(f,opts){
+  hideVideoError();
+  hideVideoRestore();
+  if(lastVideoUrl){ try{URL.revokeObjectURL(lastVideoUrl);}catch(_){} }
+  lastVideoUrl=URL.createObjectURL(f);
+  video.removeAttribute("src");
+  video.src=lastVideoUrl;
+  video.load();
+  video.style.display="block"; vdrop.style.display="none"; videoReady=true;
+  btnVSwap.style.display="";   // V2.956: the drop zone is gone – this is the way to another version
+  currentVideoName=f.name;
+  // the film belongs to the document: remember its name in the project
+  if(state.videoName!==f.name){
+    state.videoName=f.name;
+    if(!opts||!opts.restored) markDirty();
+  }
+  document.getElementById("vname").textContent=f.name;
+
+  /* V2.956: back to the passage we were looking at. The position can only be applied once
+     the new file has reported its duration – a shorter version simply starts at 0. */
+  if(resumeAt!=null){
+    const want=resumeAt; resumeAt=null;
+    video.addEventListener("loadedmetadata",function once(){
+      video.removeEventListener("loadedmetadata",once);
+      let kept=false;
+      if(want>0 && isFinite(video.duration) && want<video.duration){
+        try{ video.currentTime=want; kept=true; }catch(err){}
+      }
+      updateVideoClock();
+      toast(kept ? t("msg.videoResumed",{name:f.name, tc:fmtFull(videoToTc(want))})
+                 : t("msg.videoSwapped",{name:f.name}));
+    });
+  }
+
+  // Some formats (e.g. ProRes/.mov, MKV, MXF) deliver neither metadata nor an
+  // immediate error event. If nothing has been decoded after a short while, warn.
+  clearTimeout(loadVideo._t);
+  loadVideo._t=setTimeout(()=>{
+    if(videoReady && (isNaN(video.duration) || video.readyState===0)){
+      showVideoError(f, "The browser could not open this video.");
+    }
+  }, 4000);
+}
+
+function showVideoError(f, msg){
+  clearTimeout(loadVideo._t);
+  videoReady=false;
+  currentVideoName="";
+  video.pause(); video.removeAttribute("src"); video.load();
+  video.style.display="none";
+  document.getElementById("vname").textContent="";
+  const name=(f&&f.name)?(" ("+f.name+")"):"";
+  verror.style.display="block";
+  verror.innerHTML=
+    "<b>"+escHtml(t("verr.head",{name:name}))+"</b><br>"+
+    t("verr.body")+
+    '<br><button id="reselect" class="ghost">'+escHtml(t("verr.reselect"))+'</button>';
+  const rb=document.getElementById("reselect");
+  if(rb) rb.addEventListener("click",chooseVideo);
+}
+function hideVideoError(){ verror.style.display="none"; verror.innerHTML=""; }
+
+video.addEventListener("error",()=>{
+  // ignore errors while clearing the source (teardown)
+  if(!video.getAttribute("src")) return;
+  showVideoError(null);
+});
+/* The clock under the player shows the ABSOLUTE timecode (start timecode + position),
+   so it can be compared with the timecodes in the table at a glance. The value on the
+   right stays the plain running time of the film. */
+function updateVideoClock(){
+  const el=document.getElementById("vnow"); if(!el) return;
+  el.textContent=fmtFull(videoReady ? videoToTc(video.currentTime) : state.offset);
+}
+video.addEventListener("timeupdate",updateVideoClock);
+video.addEventListener("seeked",updateVideoClock);
+video.addEventListener("loadedmetadata",()=>{
+  clearTimeout(loadVideo._t);
+  document.getElementById("vdur").textContent="/ "+fmtFull(video.duration);
+  updateVideoClock();
+});
+// sec = absolute timecode as shown in the table – converted to a video position here
+function seekTo(sec){
+  if(!videoReady){ toast(t("msg.noVideo")); return; }
+  const pos=tcToVideo(sec);
+  const dur=isNaN(video.duration)?null:video.duration;
+  if(pos<0 || (dur!==null && pos>dur)){
+    toast(t("msg.tcOutside",{from:fmtFull(state.offset), to:fmtFull(videoToTc(dur||0))}));
+    return;
+  }
+  video.currentTime=Math.max(0,pos); video.focus(); updateVideoClock();
+}
+document.getElementById("vplay").addEventListener("click",togglePlay);
+document.getElementById("vback5").addEventListener("click",()=>{ if(videoReady) video.currentTime=Math.max(0,video.currentTime-5);});
+document.getElementById("vfwd5").addEventListener("click",()=>{ if(videoReady) video.currentTime=video.currentTime+5;});
+function togglePlay(){ if(!videoReady){toast(t("msg.noVideo"));return;} video.paused?video.play():video.pause(); }
+
+// Set the start of the active row to the current video position
+function markStart(i){
+  if(!videoReady){ toast(t("msg.noVideo")); return; }
+  if(i<0||i>=state.rows.length){ toast(t("msg.selectRow")); return; }
+  const T=Math.round(videoToTc(video.currentTime));
+  if(setRowStart(i,T)){
+    toast(i===0 ? t("msg.startRow1",{tc:fmtFull(T)}) : t("msg.rowStarts",{n:i+1, tc:fmtFull(T)}));
+  }
+}
+
+/* ---------- Writing shortcuts (also active inside input fields) ---------- */
+document.addEventListener("keydown",e=>{
+  if(docxOverlay.classList.contains("show")||bkOverlay.classList.contains("show")) return;
+  const isEnter=(e.key==="Enter"||e.code==="Enter"||e.code==="NumpadEnter");
+  // Ctrl/Cmd+Shift+Enter: insert a new row BELOW the active one and jump into it
+  if((e.ctrlKey||e.metaKey) && e.shiftKey && !e.altKey && isEnter){
+    e.preventDefault();
+    const k=rowIndexById(activeRowId);
+    insertAt(k>=0 ? k+1 : state.rows.length, true);
+    return;
+  }
+  // Ctrl/Cmd+Enter: start of the active row = current video position
+  if((e.ctrlKey||e.metaKey) && !e.shiftKey && !e.altKey && isEnter){
+    e.preventDefault();
+    markStart(rowIndexById(activeRowId));
+    return;
+  }
+  // Alt+Shift+D: show / hide the description column (e.code, because Alt+D yields "∂" on a Mac)
+  if(e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code==="KeyD"){
+    e.preventDefault(); toggleDesc(); return;
+  }
+  // Alt+Enter: play/pause   Alt+arrows: ±5 s — even while typing
+  if(e.altKey && isEnter){ e.preventDefault(); togglePlay(); return; }
+  if(e.altKey && e.key==="ArrowLeft"){ e.preventDefault(); if(videoReady) video.currentTime=Math.max(0,video.currentTime-5); return; }
+  if(e.altKey && e.key==="ArrowRight"){ e.preventDefault(); if(videoReady) video.currentTime=video.currentTime+5; return; }
+});
+
+/* ---------- Keyboard (global, outside of inputs) ---------- */
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && docxOverlay.classList.contains("show")){ closeDocx(); return; }
+  if(e.key==="Escape" && bkOverlay.classList.contains("show")){ closeBackups(); return; }
+  if(docxOverlay.classList.contains("show")||bkOverlay.classList.contains("show")) return;
+  if(e.ctrlKey||e.metaKey||e.altKey) return;
+  const tag=e.target.tagName;
+  if(tag==="TEXTAREA"||tag==="INPUT"||tag==="BUTTON"||e.target.isContentEditable) return;
+  if(!videoReady) return;
+  if(e.code==="Space"){ e.preventDefault(); togglePlay(); }
+  else if(e.key==="ArrowLeft"){ e.preventDefault(); video.currentTime=Math.max(0,video.currentTime-5); }
+  else if(e.key==="ArrowRight"){ e.preventDefault(); video.currentTime=video.currentTime+5; }
+});
+
+/* ---------- Stats / dirty flag ---------- */
+function updateStats(){
+  document.getElementById("cntRows").textContent=state.rows.length;
+  document.getElementById("cntText").textContent=state.rows.filter(r=>r.text.trim()!=="").length;
+  document.getElementById("endTc").textContent=fmtFull(scriptStartSeconds()+totalLength());
+}
+let dirty=false;
+function markDirty(){ dirty=true; pristine=false; document.body.classList.add("dirty"); scheduleAutosave(); }
+function clearDirty(){ dirty=false; document.body.classList.remove("dirty"); }
+window.addEventListener("beforeunload",e=>{ if(dirty){ doAutosave(); e.preventDefault(); e.returnValue=""; }});
+
+/* ---------- Autosave: rotating timestamped snapshots in browser storage ---------- */
+const AUTOSAVES_KEY="filmtext-o-mat:autosaves";
+const AUTOSAVE_LEGACY_KEY="filmtext-o-mat:autosave"; // format up to V2.7
+const CLEAN_KEY="filmtext-o-mat:cleanAt";
+const AUTOSAVE_SLOTS=5;          // this many snapshots are kept
+const AUTOSAVE_SLOT_SPAN=120000; // a new snapshot starts at most every 2 minutes
+let autosaveTimer=null;
+function setSavedNote(txt){ const el=document.getElementById("savedNote"); if(el) el.textContent=txt; }
+function readSlots(){
+  try{ const a=JSON.parse(localStorage.getItem(AUTOSAVES_KEY)||"[]"); return Array.isArray(a)?a:[]; }
+  catch(err){ return []; }
+}
+function writeSlots(slots){
+  try{ localStorage.setItem(AUTOSAVES_KEY, JSON.stringify(slots)); }
+  catch(err){ // storage full: keep only the most recent snapshots
+    try{ localStorage.setItem(AUTOSAVES_KEY, JSON.stringify(slots.slice(0,2))); }catch(err2){}
+  }
+}
+function cleanAt(){ let v=0; try{ v=parseInt(localStorage.getItem(CLEAN_KEY)||"0",10); }catch(err){} return isNaN(v)?0:v; }
+function markClean(){ try{ localStorage.setItem(CLEAN_KEY, String(Date.now())); }catch(err){} setSavedNote(""); }
+function migrateLegacyAutosave(){ // migrate the old single backup from V2.7
+  try{
+    const raw=localStorage.getItem(AUTOSAVE_LEGACY_KEY);
+    if(!raw) return;
+    const d=JSON.parse(raw);
+    if(d && d.project){
+      const slots=readSlots();
+      slots.push({createdAt:d.savedAt||Date.now(), savedAt:d.savedAt||Date.now(), project:d.project});
+      slots.sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
+      writeSlots(slots.slice(0,AUTOSAVE_SLOTS));
+    }
+    localStorage.removeItem(AUTOSAVE_LEGACY_KEY);
+  }catch(err){}
+}
+function doAutosave(){
+  try{
+    const now=Date.now();
+    const snap={createdAt:now, savedAt:now, project:JSON.parse(serialize()).project};
+    const slots=readSlots();
+    if(slots[0] && (now-(slots[0].createdAt||0))<AUTOSAVE_SLOT_SPAN){
+      snap.createdAt=slots[0].createdAt; // ongoing work: update the newest snapshot
+      slots[0]=snap;
+    } else {
+      slots.unshift(snap);               // new snapshot with its own timestamp
+    }
+    writeSlots(slots.slice(0,AUTOSAVE_SLOTS));
+    const d=new Date(now);
+    const hhmmss=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0");
+    setSavedNote(t("msg.autosaved",{time:hhmmss}));
+  }catch(err){ /* storage possibly full/disabled – ignore silently */ }
+}
+function scheduleAutosave(){
+  clearTimeout(autosaveTimer);
+  autosaveTimer=setTimeout(doAutosave, 2000); // 2 s after the last change
+}
+setInterval(()=>{ if(dirty) doAutosave(); }, 30000); // additionally every 30 s
+
+/* ---------- View / restore backups ---------- */
+const bkOverlay=document.getElementById("bkOverlay");
+const bkList=document.getElementById("bkList");
+function fmtStamp(ms){
+  const loc=LOCALE[uiLang]||"en-GB";
+  try{ return new Date(ms||Date.now()).toLocaleString(loc,{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"}); }
+  catch(err){ return new Date(ms||Date.now()).toLocaleString(loc); }
+}
+function openBackups(startup){
+  const slots=readSlots();
+  bkList.innerHTML="";
+  document.getElementById("bkEmpty").style.display=slots.length?"none":"block";
+  document.getElementById("bkSub").textContent=t(startup?"bk.subStartup":"bk.subNormal");
+  document.getElementById("bkClose").textContent=t(startup?"bk.continue":"bk.close");
+  slots.forEach(s=>{
+    const p=s.project||{};
+    const rows=(p.rows||[]);
+    const withText=rows.filter(r=>String(r.text||"").trim()!=="").length;
+    const div=document.createElement("div"); div.className="bslot";
+    const meta=document.createElement("div"); meta.className="bmeta";
+    const t1=document.createElement("div"); t1.className="btitle";
+    t1.textContent=(p.title&&String(p.title).trim())||t("bk.untitled");
+    const t2=document.createElement("div"); t2.className="bsub";
+    t2.textContent=t("bk.meta",{stamp:fmtStamp(s.savedAt), rows:rows.length, withText:withText});
+    meta.appendChild(t1); meta.appendChild(t2);
+    const btn=document.createElement("button"); btn.textContent=t("bk.restore");
+    btn.addEventListener("click",()=>{
+      if(dirty && !confirm(t("msg.confirmRestore"))) return;
+      applyLoadedProject(p);
+      saveHandle=null;
+      markDirty();
+      bkOverlay.classList.remove("show"); bkOverlay.dataset.startup="";
+      toast(t("msg.backupRestored",{stamp:fmtStamp(s.savedAt)}));
+    });
+    div.appendChild(meta); div.appendChild(btn);
+    bkList.appendChild(div);
+  });
+  bkOverlay.dataset.startup=startup?"1":"";
+  bkOverlay.classList.add("show");
+}
+function closeBackups(){
+  const wasStartup=bkOverlay.dataset.startup==="1";
+  bkOverlay.classList.remove("show"); bkOverlay.dataset.startup="";
+  if(wasStartup) markClean(); // don't ask again on next start – backups remain available under “Backups…”
+}
+document.getElementById("btnBackups").addEventListener("click",()=>openBackups(false));
+document.getElementById("bkClose").addEventListener("click",closeBackups);
+bkOverlay.addEventListener("click",e=>{ if(e.target===bkOverlay) closeBackups(); });
+function maybeOfferRestore(){
+  migrateLegacyAutosave();
+  const slots=readSlots();
+  if(slots.length && (slots[0].savedAt||0)>cleanAt()) openBackups(true);
+}
+
+/* ---------- Header fields ---------- */
+const projTitle=document.getElementById("projTitle");
+const offsetIn=document.getElementById("offset");
+projTitle.addEventListener("input",()=>{ state.title=projTitle.value; document.getElementById("printTitle").textContent=projTitle.value; markDirty(); });
+offsetIn.addEventListener("change",()=>{
+  state.offset=Math.max(0,parseToSeconds(offsetIn.value));
+  offsetIn.value=fmtFull(state.offset);
+  markDirty(); refreshTimecodes(); updateVideoClock();
+});
+// One click on the badge puts row 1 back onto the first frame of the film.
+document.getElementById("leadBadge").addEventListener("click",()=>{
+  if(!state.lead) return;
+  state.lead=0; markDirty(); refreshTimecodes(); toast(t("msg.leadCleared"));
+});
+
+/* ---------- Save / open / export ---------- */
+function serialize(){
+  return JSON.stringify({app:"filmtext-o-mat",version:3,project:Object.assign({},state,{textLang:textLang})},null,2);
+}
+/* Filename stem: keep letters/digits of any script (é, ñ, ü …), drop the rest. */
+function safeBase(){
+  let b=String(state.title||"").trim();
+  try{ b=b.replace(/[^\p{L}\p{N} _\-]/gu,""); }
+  catch(err){ b=b.replace(/[^\wäöüÄÖÜß \-]/g,""); }   // fallback for old engines
+  b=b.trim().replace(/\s+/g,"_");
+  return b||"filmtext-o-mat";
+}
+function projFilename(){ return safeBase()+".json"; }
+const supportsFS = (typeof window.showSaveFilePicker==="function");
+let saveHandle=null; // remembered file handle (Chrome/Edge)
+
+async function writeToHandle(handle, text){
+  const w=await handle.createWritable();
+  await w.write(text); await w.close();
+}
+async function doSave(){
+  const text=serialize();
+  if(supportsFS){
+    try{
+      if(!saveHandle){
+        saveHandle=await window.showSaveFilePicker({
+          suggestedName: projFilename(),
+          types:[{description:t("fp.desc"), accept:{"application/json":[".json"]}}]
+        });
+      }
+      await writeToHandle(saveHandle, text);
+      clearDirty(); doAutosave(); markClean(); toast(t("msg.saved",{name:(saveHandle.name||projFilename())}));
+      return;
+    }catch(err){
+      if(err && err.name==="AbortError"){ return; } // user cancelled
+      saveHandle=null; // on problems, fall back to download
+    }
+  }
+  const blob=new Blob([text],{type:"application/json"});
+  if(!(await download(blob, projFilename()))) return;   // share sheet cancelled – nothing saved
+  clearDirty(); doAutosave(); markClean(); toast(t("msg.saved",{name:projFilename()}));
+}
+async function doSaveAs(){ saveHandle=null; await doSave(); }
+document.getElementById("btnSave").addEventListener("click",doSave);
+document.getElementById("btnSaveAs").addEventListener("click",doSaveAs);
+
+document.getElementById("btnLoad").addEventListener("click",()=>document.getElementById("fileProj").click());
+function applyLoadedProject(p){
+  state.title=p.title||"";
+  state.offset=parseToSeconds(p.offset!==undefined?p.offset:0);
+  state.lead=Math.max(0,parseToSeconds(p.lead!==undefined?p.lead:0));   // files before V2.95 carry no lead-in
+  state.rows=(p.rows||[]).map(r=>newRow({text:r.text||"",desc:r.desc||"",textF:r.textF,descF:r.descF,len:Math.max(0,r.len||0),broll:!!r.broll}));
+  if(state.rows.length===0) state.rows.push(newRow());
+  state.videoName=(typeof p.videoName==="string")?p.videoName:"";   // files before V2.93 carry no film reference
+  // Files written before V2.9 carry no script language – keep the current setting.
+  if(p.textLang && LOCALE[p.textLang]) setTextLang(p.textLang, true);
+  projTitle.value=state.title; document.getElementById("printTitle").textContent=state.title;
+  offsetIn.value=fmtFull(state.offset);
+  pristine=false;
+  clearDirty(); render(); updateVideoClock();
+  tryRestoreVideo();   // async; either re-attaches the film or shows the banner
+}
+document.getElementById("fileProj").addEventListener("change",e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const obj=JSON.parse(rd.result);
+      applyLoadedProject(obj.project||obj);
+      saveHandle=null; // an opened file is not (yet) a write target
+      toast(t("msg.opened",{name:f.name}));
+    }catch(err){ toast(t("msg.readFail")); }
+  };
+  rd.readAsText(f);
+  e.target.value="";
+});
+document.getElementById("btnNew").addEventListener("click",()=>{
+  if(dirty && !confirm(t("msg.confirmNew"))) return;
+  seed(); projTitle.value=""; offsetIn.value="00:00:00"; document.getElementById("printTitle").textContent="";
+  hideVideoRestore();   // a loaded film stays on screen; a pending banner does not
+  saveHandle=null; markClean(); clearDirty(); render(); updateVideoClock();
+});
+/* ---------- Word export (.docx, no library, offline) ---------- */
+const crcTable=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0;}return t;})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=crcTable[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function zipBytes(entries){
+  const enc=new TextEncoder();
+  const files=entries.map(e=>{const data=enc.encode(e.str);return {name:enc.encode(e.name),data,crc:crc32(data)};});
+  let local=0; files.forEach(f=>local+=30+f.name.length+f.data.length);
+  let cd=0; files.forEach(f=>cd+=46+f.name.length);
+  const buf=new Uint8Array(local+cd+22), dv=new DataView(buf.buffer);
+  let off=0; const offs=[];
+  for(const f of files){
+    offs.push(off);
+    dv.setUint32(off,0x04034b50,true);off+=4; dv.setUint16(off,20,true);off+=2; dv.setUint16(off,0x0800,true);off+=2;
+    dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0x21,true);off+=2;
+    dv.setUint32(off,f.crc,true);off+=4; dv.setUint32(off,f.data.length,true);off+=4; dv.setUint32(off,f.data.length,true);off+=4;
+    dv.setUint16(off,f.name.length,true);off+=2; dv.setUint16(off,0,true);off+=2;
+    buf.set(f.name,off);off+=f.name.length; buf.set(f.data,off);off+=f.data.length;
+  }
+  const cdStart=off;
+  files.forEach((f,i)=>{
+    dv.setUint32(off,0x02014b50,true);off+=4; dv.setUint16(off,20,true);off+=2; dv.setUint16(off,20,true);off+=2;
+    dv.setUint16(off,0x0800,true);off+=2; dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0x21,true);off+=2;
+    dv.setUint32(off,f.crc,true);off+=4; dv.setUint32(off,f.data.length,true);off+=4; dv.setUint32(off,f.data.length,true);off+=4;
+    dv.setUint16(off,f.name.length,true);off+=2; dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0,true);off+=2;
+    dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0,true);off+=2; dv.setUint32(off,0,true);off+=4; dv.setUint32(off,offs[i],true);off+=4;
+    buf.set(f.name,off);off+=f.name.length;
+  });
+  dv.setUint32(off,0x06054b50,true);off+=4; dv.setUint16(off,0,true);off+=2; dv.setUint16(off,0,true);off+=2;
+  dv.setUint16(off,files.length,true);off+=2; dv.setUint16(off,files.length,true);off+=2;
+  dv.setUint32(off,cd,true);off+=4; dv.setUint32(off,cdStart,true);off+=4; dv.setUint16(off,0,true);off+=2;
+  return buf;
+}
+function xmlEsc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,"");}
+const RUN_BASE='<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="24"/><w:szCs w:val="24"/>';
+function runLang(){ return '<w:lang w:val="'+(LOCALE[textLang]||"en-GB")+'"/>'; }
+function cellPars(content,bold){
+  // V2.955: 1.5 line spacing, every paragraph followed by an empty line
+  const ppr='<w:pPr><w:keepLines/><w:spacing w:before="0" w:after="0" w:line="360" w:lineRule="auto"/></w:pPr>';
+  const blank=`<w:p>${ppr}<w:r><w:rPr>${RUN_BASE}</w:rPr></w:r></w:p>`;
+  const withBlank=(par,isEmpty)=>isEmpty?par:par+blank;   // an empty paragraph already IS the blank line
+  // Formatted cell content ({html:...}) with bold/italic/underline
+  if(content && typeof content==="object" && content.html!==undefined){
+    return htmlToRuns(content.html).map(line=>{
+      const runs=line.map(seg=>{
+        const rpr='<w:rPr>'+((bold||seg.b)?'<w:b/>':'')+(seg.i?'<w:i/>':'')+RUN_BASE+(seg.u?'<w:u w:val="single"/>':'')+runLang()+'</w:rPr>';
+        return `<w:r>${rpr}<w:t xml:space="preserve">${xmlEsc(seg.t)}</w:t></w:r>`;
+      }).join("");
+      const empty=line.every(seg=>!seg.t);
+      return withBlank(`<w:p>${ppr}${runs}</w:p>`, empty);
+    }).join("");
+  }
+  const rpr='<w:rPr>'+(bold?'<w:b/>':'')+RUN_BASE+runLang()+'</w:rPr>';
+  return String(content==null?"":content).split(/\r?\n/).map(ln=>
+    withBlank(`<w:p>${ppr}<w:r>${rpr}<w:t xml:space="preserve">${xmlEsc(ln)}</w:t></w:r></w:p>`, ln==="")).join("");
+}
+function buildDocXml(title, cols, dataRows){
+  const PAGE=9638; // A4 portrait, content width (11906 - 2*1134)
+  const wsum=cols.reduce((a,c)=>a+c.weight,0);
+  const widths=cols.map(c=>Math.round(c.weight/wsum*PAGE));
+  const grid=widths.map(w=>`<w:gridCol w:w="${w}"/>`).join("");
+  const trOf=(cells,type)=>{
+    const bold=(type==="head"||type==="total");
+    const tcs=cells.map((c,i)=>{
+      const shd=type==="head"?'<w:shd w:val="clear" w:color="auto" w:fill="EFEFEF"/>':'';
+      return `<w:tc><w:tcPr><w:tcW w:w="${widths[i]}" w:type="dxa"/>${shd}</w:tcPr>${cellPars(c,bold)}</w:tc>`;
+    }).join("");
+    // cantSplit: a row (= one narration block) never breaks across a page – the narrator doesn't turn mid-passage
+    return (type==="head")?`<w:tr><w:trPr><w:cantSplit/><w:tblHeader/></w:trPr>${tcs}</w:tr>`:`<w:tr><w:trPr><w:cantSplit/></w:trPr>${tcs}</w:tr>`;
+  };
+  const head=trOf(cols.map(c=>c.label),"head");
+  const body=dataRows.map(r=>trOf(cols.map(c=>r.cells[c.key]),r.type||"body")).join("");
+  const tbl=`<w:tbl><w:tblPr><w:tblW w:w="${PAGE}" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="999999"/><w:left w:val="single" w:sz="4" w:space="0" w:color="999999"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="999999"/><w:right w:val="single" w:sz="4" w:space="0" w:color="999999"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/></w:tblBorders></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${head}${body}</w:tbl>`;
+  const titlePar=title?`<w:p><w:pPr><w:pStyle w:val="Title"/><w:spacing w:after="0" w:line="360" w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:b/><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="32"/></w:rPr><w:t xml:space="preserve">${xmlEsc(title)}</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:after="0" w:line="360" w:lineRule="auto"/></w:pPr></w:p>`:"";
+  const sect=`<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${titlePar}${tbl}<w:p/>${sect}</w:body></w:document>`;
+}
+/* V2.955: complete Word 2013+ package – styles, settings (compatibilityMode 15), fonts,
+   core/app properties. Without settings.xml Word treats a file as an old-format document and
+   opens it in compatibility mode. */
+const DOCX_CT=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
+const DOCX_RELS=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
+const DOCX_DOCRELS=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/></Relationships>`;
+function docxStyles(){
+  const lang=LOCALE[textLang]||"en-GB";
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="24"/><w:szCs w:val="24"/><w:lang w:val="${lang}" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:rPr><w:b/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style><w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style><w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`;
+}
+const DOCX_SETTINGS=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:zoom w:percent="100"/><w:defaultTabStop w:val="708"/><w:hyphenationZone w:val="425"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="enableOpenTypeFeatures" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="doNotFlipMirrorIndents" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="differentiateMultirowTableHeaders" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/><w:compatSetting w:name="useWord2013TrackBottomHyphenation" w:uri="http://schemas.microsoft.com/office/word" w:val="0"/></w:compat></w:settings>`;
+const DOCX_FONTS=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Calibri"><w:panose1 w:val="020F0502020204030204"/><w:charset w:val="00"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font></w:fonts>`;
+function docxCore(title){
+  const now=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xmlEsc(title)}</dc:title><dc:creator>Filmtext-o-Mat</dc:creator><cp:lastModifiedBy>Filmtext-o-Mat</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
+}
+const DOCX_APP=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Microsoft Office Word</Application><AppVersion>16.0000</AppVersion><DocSecurity>0</DocSecurity><ScaleCrop>false</ScaleCrop><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged></Properties>`;
+
+const COLDEFS=[
+  {key:"tc",   weight:1.9, ck:"ck_tc"},
+  {key:"text", weight:6.0, ck:"ck_text"},
+  {key:"desc", weight:4.0, ck:"ck_desc"},
+  {key:"len",  weight:1.9, ck:"ck_len"},
+];
+const docxOverlay=document.getElementById("docxOverlay");
+function openDocx(){ docxOverlay.classList.add("show"); }
+function closeDocx(){ docxOverlay.classList.remove("show"); }
+document.getElementById("btnDocx").addEventListener("click",openDocx);
+document.getElementById("docxCancel").addEventListener("click",closeDocx);
+docxOverlay.addEventListener("click",e=>{ if(e.target===docxOverlay) closeDocx(); });
+document.querySelectorAll(".preset").forEach(b=>b.addEventListener("click",()=>{
+  const p=b.dataset.preset;
+  const set=(id,v)=>{document.getElementById(id).checked=v;};
+  if(p==="sprecher"){ set("ck_tc",true); set("ck_text",true); set("ck_desc",false); set("ck_len",false); set("ck_skipEmpty",true); }
+  else if(p==="redaktion"){ set("ck_tc",true); set("ck_text",true); set("ck_desc",true); set("ck_len",true); set("ck_skipEmpty",false); }
+  else { set("ck_tc",true); set("ck_text",true); set("ck_desc",true); set("ck_len",true); set("ck_skipEmpty",false); }
+}));
+document.getElementById("docxExport").addEventListener("click",()=>{
+  const cols=COLDEFS.filter(c=>document.getElementById(c.ck).checked)
+                    .map(c=>Object.assign({},c,{label:xp(c.key)}));
+  if(cols.length===0){ toast(t("msg.selectColumn")); return; }
+  const skipEmpty=document.getElementById("ck_skipEmpty").checked;
+  const withTotal=document.getElementById("ck_total").checked;
+
+  const data=[];
+  state.rows.forEach((r,i)=>{
+    if(skipEmpty && r.text.trim()==="") return;
+    data.push({type:"body", cells:{ tc:fmtFull(rowStartSeconds(i)), text:{html:r.textF}, desc:{html:r.descF}, len:fmtLen(r.len) }});
+  });
+  if(withTotal){
+    data.push({type:"total", cells:{ tc:"", text:xp("total"), desc:"", len:fmtFull(totalLength()) }});
+  }
+  const doc=buildDocXml(state.title.trim(), cols, data);
+  const bytes=zipBytes([
+    {name:"[Content_Types].xml", str:DOCX_CT},
+    {name:"_rels/.rels",         str:DOCX_RELS},
+    {name:"docProps/core.xml",   str:docxCore(state.title.trim())},
+    {name:"docProps/app.xml",    str:DOCX_APP},
+    {name:"word/document.xml",   str:doc},
+    {name:"word/_rels/document.xml.rels", str:DOCX_DOCRELS},
+    {name:"word/styles.xml",     str:docxStyles()},
+    {name:"word/settings.xml",   str:DOCX_SETTINGS},
+    {name:"word/fontTable.xml",  str:DOCX_FONTS},
+  ]);
+  const blob=new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+  const base=safeBase();
+  download(blob, base+".docx");
+  closeDocx(); toast(t("msg.docxDone",{name:base+".docx"}));
+});
+
+document.getElementById("btnCsv").addEventListener("click",()=>{
+  const esc=v=>'"'+String(v).replace(/"/g,'""')+'"';
+  let out=[xp("tc"),xp("text"),xp("desc"),xp("len")].join(";")+"\r\n";
+  state.rows.forEach((r,i)=>{
+    out+=[esc(fmtFull(rowStartSeconds(i))),esc(r.text),esc(r.desc),esc(fmtLen(r.len))].join(";")+"\r\n";
+  });
+  out+=";;"+esc(xp("total"))+";"+esc(fmtFull(totalLength()))+"\r\n";
+  const blob=new Blob(["\uFEFF"+out],{type:"text/csv;charset=utf-8"});
+  download(blob,safeBase()+".csv");
+  toast(t("msg.csvDone"));
+});
+document.getElementById("btnPrint").addEventListener("click",()=>window.print());
+
+/* Before printing: insert text fields as plain text so nothing gets cut off */
+function buildPrintText(){
+  removePrintText();
+  elRows.querySelectorAll(".ta").forEach(ta=>{
+    const d=document.createElement("div");
+    d.className="print-text"+(ta.classList.contains("desc")?" desc":"");
+    // V2.955: one block per paragraph, same rules as the Word export (htmlToRuns)
+    htmlToRuns(ta.innerHTML).forEach(line=>{
+      const p=document.createElement("div");
+      const empty=line.every(seg=>!seg.t);
+      p.className="pp"+(empty?"":" gap");
+      line.forEach(seg=>{
+        let n=document.createTextNode(seg.t);
+        if(seg.u){ const e=document.createElement("u"); e.appendChild(n); n=e; }
+        if(seg.i){ const e=document.createElement("i"); e.appendChild(n); n=e; }
+        if(seg.b){ const e=document.createElement("b"); e.appendChild(n); n=e; }
+        p.appendChild(n);
+      });
+      d.appendChild(p);
+    });
+    ta.parentNode.insertBefore(d, ta.nextSibling);
+  });
+}
+function removePrintText(){
+  document.querySelectorAll(".print-text").forEach(d=>d.remove());
+}
+window.addEventListener("beforeprint",buildPrintText);
+window.addEventListener("afterprint",removePrintText);
+document.getElementById("btnAdd").addEventListener("click",()=>insertAt(state.rows.length,true));
+
+/* ---------- SRT export (subtitles) ---------- */
+const SRT_MAX=5; // seconds per subtitle
+function srtTime(sec){
+  sec=Math.max(0,Math.round(sec));
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+  const p=(n,w)=>String(n).padStart(w,"0");
+  return p(h,2)+":"+p(m,2)+":"+p(s,2)+",000";
+}
+// Split words as evenly as possible (by character count) into m groups, at word boundaries
+function balancedGroups(words, m){
+  if(m<=1) return [words.join(" ")];
+  const total=words.reduce((a,w)=>a+w.length+1,0);
+  const fair=total/m;
+  const groups=[]; let cur=[], curLen=0;
+  for(let i=0;i<words.length;i++){
+    cur.push(words[i]); curLen+=words[i].length+1;
+    const remainWords=words.length-i-1;
+    const groupsStillNeeded=m-groups.length-1; // after this group
+    if(groups.length<m-1 && curLen>=fair && remainWords>groupsStillNeeded){
+      groups.push(cur.join(" ")); cur=[]; curLen=0;
+    }
+  }
+  groups.push(cur.join(" "));
+  return groups;
+}
+// Split a block into subtitle cues (each ≤ SRT_MAX s)
+function srtCues(text, start, dur){
+  const clean=String(text).replace(/\s+/g," ").trim();
+  if(dur<1) dur=1;
+  if(dur<=SRT_MAX || clean==="") return [{s:start,e:start+dur,t:clean}];
+  const n=Math.ceil(dur/SRT_MAX);                 // number of time windows, each ≤ SRT_MAX
+  const words=clean.split(" ");
+  const m=Math.min(n, words.length);              // that many text groups
+  const groups=balancedGroups(words, m);
+  const cues=[];
+  for(let k=0;k<groups.length;k++){
+    let s=start+Math.round(dur*k/n);
+    let e=start+Math.round(dur*(k+1)/n);
+    if(e<=s) e=s+1;
+    cues.push({s,e,t:groups[k]});
+  }
+  return cues;
+}
+document.getElementById("btnSrt").addEventListener("click",()=>{
+  let idx=1, out="", blocks=0, cuesTotal=0;
+  state.rows.forEach((r,i)=>{
+    if(r.text.trim()==="") return;                // skip ambience/B-roll
+    // SRT rides along with the video file, so its clock has to start at 0, not at the
+    // start timecode – hence the conversion back to a video position.
+    const start=Math.max(0, tcToVideo(rowStartSeconds(i)));
+    let dur=r.len||0; if(dur<=0) dur=1;
+    blocks++;
+    srtCues(r.text, start, dur).forEach(c=>{
+      out+=idx+"\r\n"+srtTime(c.s)+" --> "+srtTime(c.e)+"\r\n"+c.t.replace(/\r?\n/g,"\r\n")+"\r\n\r\n";
+      idx++; cuesTotal++;
+    });
+  });
+  if(cuesTotal===0){ toast(t("msg.noText")); return; }
+  const blob=new Blob([out],{type:"application/x-subrip;charset=utf-8"});
+  const base=safeBase();
+  download(blob, base+".srt");
+  toast(t("msg.srtDone",{cues:cuesTotal, blocks:blocks, name:base+".srt"}));
+});
+
+/* V3.0: on iPhone/iPad a home-screen app cannot reliably start a download, so there the share
+   sheet opens ("Save to Files", AirDrop, Mail …). Resolves false only if the user cancels it. */
+const IS_IOS=/iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);   // iPadOS reports itself as a Mac
+async function download(blob,filename){
+  if(IS_IOS && typeof navigator.share==="function" && typeof File==="function"){
+    try{
+      const f=new File([blob],filename,{type:blob.type||"application/octet-stream"});
+      if(!navigator.canShare || navigator.canShare({files:[f]})){
+        await navigator.share({files:[f]});
+        return true;
+      }
+    }catch(err){
+      if(err && err.name==="AbortError") return false;   // user closed the share sheet
+      // anything else (e.g. type not shareable): fall through to the classic download
+    }
+  }
+  downloadLink(blob,filename);
+  return true;
+}
+function downloadLink(blob,filename){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},100);
+}
+
+/* ---------- Toast ---------- */
+let toastT;
+function toast(msg){
+  const el=document.getElementById("toast");
+  el.textContent=msg; el.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove("show"),2200);
+}
+
+/* ---------- Measure the top bar anchor precisely ---------- */
+function syncAppbar(){
+  const h=document.querySelector("header").offsetHeight;
+  document.documentElement.style.setProperty("--appbar", h+"px");
+}
+window.addEventListener("resize",syncAppbar);
+window.addEventListener("resize",()=>{ if(typeof resizeAllTextareas==="function") resizeAllTextareas(); });
+window.addEventListener("load",syncAppbar);
+
+/* ---------- Video panel width via drag handle ---------- */
+(function(){
+  const resizer=document.getElementById("vresizer");
+  const MIN=260;
+  // V2.955: start larger – about 36 % of the window, between 440 and 720 px
+  function defaultWidth(){ return Math.max(440, Math.min(720, Math.round(window.innerWidth*0.36))); }
+  function maxWidth(){ return Math.max(MIN, Math.round(window.innerWidth*0.7)); }
+  function setWidth(px){
+    px=Math.max(MIN, Math.min(maxWidth(), Math.round(px)));
+    document.documentElement.style.setProperty("--videow", px+"px");
+    syncAppbar();
+    if(typeof resizeAllTextareas==="function") resizeAllTextareas();
+  }
+  let dragging=false;
+  function clientX(e){ return e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX; }
+  function onDown(e){
+    dragging=true; document.body.classList.add("resizing");
+    e.preventDefault();
+    window.addEventListener("mousemove",onMove); window.addEventListener("mouseup",onUp);
+    window.addEventListener("touchmove",onMove,{passive:false}); window.addEventListener("touchend",onUp);
+  }
+  function onMove(e){
+    if(!dragging) return;
+    if(e.cancelable) e.preventDefault();
+    const main=document.querySelector("main");
+    const left=main.getBoundingClientRect().left;
+    setWidth(clientX(e)-left-22); // 22px left padding of the video column
+  }
+  function onUp(){
+    dragging=false; document.body.classList.remove("resizing");
+    window.removeEventListener("mousemove",onMove); window.removeEventListener("mouseup",onUp);
+    window.removeEventListener("touchmove",onMove); window.removeEventListener("touchend",onUp);
+  }
+  resizer.addEventListener("mousedown",onDown);
+  resizer.addEventListener("touchstart",onDown,{passive:false});
+  resizer.addEventListener("dblclick",()=>setWidth(defaultWidth()));
+  setWidth(defaultWidth());
+  window.addEventListener("resize",()=>{
+    // don't exceed the maximum when the window shrinks
+    const cur=parseInt(getComputedStyle(document.documentElement).getPropertyValue("--videow"))||defaultWidth();
+    if(cur>maxWidth()) setWidth(cur);
+  });
+})();
+
+/* ---------- Language switching ---------- */
+/* setUiLang: interface only. Re-seeds the example rows only while the project is untouched –
+   never rewrites text the user has typed. setTextLang: spellchecking + export labels;
+   it belongs to the document and is stored in the project file. */
+function setUiLang(lang, silent){
+  if(!I18N[lang]) return;
+  uiLang=lang;
+  try{ localStorage.setItem(UILANG_KEY, lang); }catch(err){}
+  const sel=document.getElementById("uiLangSel"); if(sel) sel.value=lang;
+  applyI18n();
+  if(pristine){ seed(); projTitle.value=""; offsetIn.value="00:00:00"; }
+  render(); updateVideoClock();
+  if(!silent) toast(t("msg.uiLangSet"));
+}
+function setTextLang(lang, silent){
+  if(!LOCALE[lang]) return;
+  textLang=lang;
+  state.textLang=lang;
+  const sel=document.getElementById("textLangSel"); if(sel) sel.value=lang;
+  applyTextLang();
+  render();   // force the browser to re-evaluate spellchecking of the text fields
+  if(!silent) toast(t("msg.textLangSet",{lang:AUTONYM[lang]}));
+}
+document.getElementById("uiLangSel").addEventListener("change",e=>setUiLang(e.target.value));
+document.getElementById("textLangSel").addEventListener("change",e=>{ setTextLang(e.target.value); markDirty(); });
+
+/* ---------- Start ---------- */
+document.getElementById("uiLangSel").value=uiLang;
+document.getElementById("textLangSel").value=textLang;
+applyI18n(); applyTextLang(); applyDescCol();
+seed(); render(); clearDirty(); updateVideoClock(); syncAppbar(); maybeOfferRestore();
+/* V2.957: start-up completed – remove the no-script notice (last step on purpose, see header note) */
+(function(){ const n=document.getElementById("nojs"); if(n && n.parentNode) n.parentNode.removeChild(n); syncAppbar(); })();
+/* V3.0: offline operation. Only over https/localhost – a page opened as a local file has no service worker. */
+if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost" || location.hostname==="127.0.0.1")){
+  window.addEventListener("load",()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
+}
+</script>
+</body>
+</html>
