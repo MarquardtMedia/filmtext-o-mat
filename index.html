@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Filmtext-o-Mat V3.0 · © 2026 Ulf Marquardt · All rights reserved · No modification or redistribution without permission -->
+<!-- Filmtext-o-Mat V3.03 · © 2026 Ulf Marquardt · All rights reserved · No modification or redistribution without permission -->
 <!-- V2.83: new rows are stamped with the current video position when appended at the end · cursor now lands in the new row -->
 <!-- V2.9:  one file, two languages. Interface language (DE/EN) and script language are separate settings. -->
 <!-- V2.91: the two language pickers are labelled with language-neutral icons instead of translated words,
@@ -56,6 +56,23 @@
      touched: timecodes, lengths and text stay exactly as they are – only the film behind them
      is exchanged. If the new version has a different lead-in, the start timecode in the header
      is the one place to correct. -->
+<!-- V3.01: an "Install app" button in the top bar. Installing was already possible in V3.0, but
+     hidden in browser menus most people never open. The button only appears where installing
+     works and the app is not installed yet:
+     · Chrome / Edge / Samsung Internet (Windows, Mac, Android): opens the browser's own install dialog.
+     · iPhone / iPad: there is no install dialog, so a short guide explains "Add to Home Screen".
+     · Safari on the Mac (macOS 14+): a short guide explains "File → Add to Dock".
+     · Started from its own icon (standalone), opened as a local file or without https: no button. -->
+<!-- V3.03: the version number is visible in the title row. The "Install app" button is now shown
+     everywhere except inside the installed app itself. Where installing is impossible – the file was
+     opened from disk (file://), or Firefox on a computer – it explains why instead of staying hidden,
+     so nobody is left wondering where the button went. -->
+<!-- V3.02: the "Install app" button is visible right away. Chrome/Edge only release their install
+     dialog (beforeinstallprompt) after the page has been viewed for 30 s and clicked once, so on a
+     first visit the V3.01 button stayed hidden. Now it shows wherever installing is possible at all;
+     if the browser's dialog is not available yet (or was dismissed), it opens a short guide for the
+     browser in use instead (Chrome, Edge, Android, iPhone/iPad, Safari on the Mac). Hidden only in
+     an installed app, for a local file, and in Firefox on a computer, which cannot install web apps. -->
 <!-- V3.0: from file to web app. The Filmtext-o-Mat is now published under ONE web address and
      opened from there on every device – Windows, Mac, iPad, iPhone, Android, any browser. A file
      passed around can never work on iPad/iPhone (the preview runs no scripts, Safari opens no local
@@ -139,6 +156,7 @@
   }
   .brand .dot{color:var(--accent)}
   .sub{color:var(--muted-2);font-size:12.5px;letter-spacing:.5px;text-transform:uppercase}
+  .appver{font-family:var(--mono);font-size:11.5px;color:var(--accent);border:1px solid var(--line);border-radius:5px;padding:1px 6px;letter-spacing:.3px}
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
   .field{display:flex;flex-direction:column;gap:3px}
   .field label{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted-2)}
@@ -382,6 +400,12 @@
   .bslot .bsub{font-size:11.5px;color:var(--muted-2);font-family:var(--mono);margin-top:2px}
   .bslot button{flex:0 0 auto;font-size:12.5px;padding:7px 10px}
 
+  /* ---- V3.01: install guide ---- */
+  .insteps{margin:0 0 16px;padding-left:22px;display:flex;flex-direction:column;gap:9px;font-size:14px;line-height:1.45;color:var(--ink)}
+  .insteps b{color:#f4eee3}
+  .inico{display:inline-block;width:16px;height:16px;vertical-align:-3px;color:var(--accent)}
+  .inico svg{width:16px;height:16px}
+
   .toast{
     position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
     background:#2a261f;border:1px solid var(--line);color:var(--ink);
@@ -460,6 +484,7 @@
   <div class="titlerow">
     <span class="brand">Filmtext<span class="dot">-o-</span>Mat</span>
     <span class="sub" data-i18n="app.sub"></span>
+    <span class="appver" id="appVer">V3.03</span>
   </div>
   <div class="toolbar">
     <div class="field">
@@ -527,6 +552,7 @@
     <button id="btnCsv" class="ghost" data-i18n="btn.csv"></button>
     <button id="btnSrt" class="ghost" data-i18n="btn.srt"></button>
     <button id="btnPrint" class="ghost" data-i18n="btn.print"></button>
+    <button id="btnInstall" class="ghost" data-i18n="btn.install" data-i18n-title="tt.install" style="display:none"></button>
     <a href="https://ko-fi.com/ulfmarquardt" target="_blank" rel="noopener" class="ghost" style="font-size:12px;text-decoration:none;opacity:0.6;white-space:nowrap;margin-left:auto;flex-shrink:0" data-i18n="btn.kofi" data-i18n-title="tt.kofi"></a>
   </div>
 </header>
@@ -634,6 +660,16 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="inOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="inH">
+    <div class="modal-h" id="inH" data-i18n="in.h"></div>
+    <p class="modal-sub" data-i18n="in.sub"></p>
+    <div id="inBody"></div>
+    <div class="modal-f">
+      <button id="inClose" class="ghost" data-i18n="in.close"></button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -691,6 +727,19 @@ en:{
   "btn.srt":"SRT",
   "btn.print":"Print / PDF",
   "btn.kofi":"☕ Buy me a coffee",
+  "btn.install":"Install app",
+  "tt.install":"Install the Filmtext-o-Mat as a program of its own: with an icon, in its own window, usable offline",
+  "in.h":"Install as an app",
+  "in.sub":"Afterwards the Filmtext-o-Mat starts from its own icon like a normal program – even without internet. Films and projects still stay on this device only.",
+  "in.ios":"<ol class='insteps'><li>Tap <b>Share</b> – the square with the arrow pointing up <span class='inico'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12'/><path d='M8 7l4-4 4 4'/><path d='M6 11H5v10h14V11h-1'/></svg></span>. In newer iOS versions it sits behind the <b>“…”</b> menu.</li><li>Choose <b>“Add to Home Screen”</b> in the list (scroll down if needed).</li><li>If shown, leave <b>“Open as Web App”</b> switched on, then tap <b>“Add”</b>. Done – from now on start it from the icon.</li></ol>",
+  "in.mac":"<ol class='insteps'><li>Open the <b>File</b> menu in the menu bar.</li><li>Choose <b>“Add to Dock…”</b> and confirm.</li></ol><p class='modal-sub'>This works in Safari from macOS 14 (Sonoma). Alternatively open the Filmtext-o-Mat in Chrome or Edge and click “Install app” there.</p>",
+  "in.chrome":"<ol class='insteps'><li>Click the install icon on the right of the <b>address bar</b> (a screen with an arrow) and confirm with <b>“Install”</b>.</li><li>No icon there? Menu <b>“⋮”</b> → <b>“Cast, save, and share”</b> → <b>“Install page as app…”</b>.</li></ol><p class='modal-sub'>Chrome only offers installation once the page has been used for a moment – if need be, keep working briefly. If the address bar shows <b>“Open in app”</b>, the Filmtext-o-Mat is already installed.</p>",
+  "in.edge":"<ol class='insteps'><li>Click the <b>“App available”</b> icon on the right of the <b>address bar</b> and confirm with <b>“Install”</b>.</li><li>No icon there? Menu <b>“…”</b> → <b>“Apps”</b> → <b>“Install this site as an app”</b>.</li></ol><p class='modal-sub'>Edge only offers installation once the page has been used for a moment – if need be, keep working briefly.</p>",
+  "in.file":"<p style='margin:0 0 14px;line-height:1.5'>The Filmtext-o-Mat was opened <b>as a file</b> here. It can only be installed when opened from its <b>web address</b> – via the “Filmtext-o-Mat starten” button on <b>ulf-marquardt.de</b>. Installation then becomes available here.</p>",
+  "in.firefox":"<p style='margin:0 0 14px;line-height:1.5'><b>Firefox</b> cannot install web apps on a computer. The Filmtext-o-Mat still works fully in the browser tab. To have it as a program of its own, open it once in <b>Chrome</b> or <b>Edge</b> and install it there.</p>",
+  "in.android":"<ol class='insteps'><li>Open the browser menu <b>“⋮”</b> at the top right.</li><li>Choose <b>“Install app”</b> or <b>“Add to Home screen”</b> and confirm.</li></ol>",
+  "in.close":"Close",
+  "msg.installed":"Installed – the Filmtext-o-Mat now also starts from its own icon.",
   "tt.kofi":"Buy the developer a coffee",
 
   "v.film":"Film",
@@ -831,6 +880,19 @@ de:{
   "btn.srt":"SRT",
   "btn.print":"Drucken / PDF",
   "btn.kofi":"☕ Kaffee spendieren",
+  "btn.install":"App installieren",
+  "tt.install":"Den Filmtext-o-Mat als eigenes Programm installieren: mit Icon, im eigenen Fenster, auch offline nutzbar",
+  "in.h":"Als App installieren",
+  "in.sub":"Danach startet der Filmtext-o-Mat über sein eigenes Icon wie ein normales Programm – auch ohne Internet. Filme und Projekte bleiben weiterhin nur auf diesem Gerät.",
+  "in.ios":"<ol class='insteps'><li>Auf <b>Teilen</b> tippen – das Quadrat mit dem Pfeil nach oben <span class='inico'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12'/><path d='M8 7l4-4 4 4'/><path d='M6 11H5v10h14V11h-1'/></svg></span>. In neueren iOS-Versionen liegt es hinter dem Menü <b>„…“</b>.</li><li>In der Liste <b>„Zum Home-Bildschirm“</b> wählen (ggf. nach unten scrollen).</li><li>Falls angezeigt, <b>„Als Web-App öffnen“</b> eingeschaltet lassen, dann auf <b>„Hinzufügen“</b> tippen. Fertig – ab jetzt über das Icon starten.</li></ol>",
+  "in.mac":"<ol class='insteps'><li>In der Menüleiste das Menü <b>Ablage</b> öffnen.</li><li><b>„Zum Dock hinzufügen …“</b> wählen und bestätigen.</li></ol><p class='modal-sub'>Das geht in Safari ab macOS 14 (Sonoma). Alternativ den Filmtext-o-Mat in Chrome oder Edge öffnen und dort auf „App installieren“ klicken.</p>",
+  "in.chrome":"<ol class='insteps'><li>Rechts in der <b>Adressleiste</b> auf das Installations-Symbol klicken (Bildschirm mit Pfeil) und <b>„Installieren“</b> bestätigen.</li><li>Ist dort kein Symbol zu sehen: Menü <b>„⋮“</b> → <b>„Streamen, speichern und teilen“</b> → <b>„Seite als App installieren …“</b>.</li></ol><p class='modal-sub'>Chrome bietet die Installation erst an, wenn die Seite kurz benutzt wurde – notfalls einen Moment weiterarbeiten. Steht in der Adressleiste <b>„In App öffnen“</b>, ist der Filmtext-o-Mat bereits installiert.</p>",
+  "in.edge":"<ol class='insteps'><li>Rechts in der <b>Adressleiste</b> auf das Symbol <b>„App verfügbar“</b> klicken und <b>„Installieren“</b> bestätigen.</li><li>Ist dort kein Symbol zu sehen: Menü <b>„…“</b> → <b>„Apps“</b> → <b>„Diese Website als App installieren“</b>.</li></ol><p class='modal-sub'>Edge bietet die Installation erst an, wenn die Seite kurz benutzt wurde – notfalls einen Moment weiterarbeiten.</p>",
+  "in.file":"<p style='margin:0 0 14px;line-height:1.5'>Der Filmtext-o-Mat wurde hier <b>als Datei</b> geöffnet. Installieren lässt er sich nur, wenn er über seine <b>Web-Adresse</b> geöffnet wird – also über den Button „Filmtext-o-Mat starten“ auf <b>ulf-marquardt.de</b>. Danach erscheint hier die Installation.</p>",
+  "in.firefox":"<p style='margin:0 0 14px;line-height:1.5'><b>Firefox</b> kann am Computer keine Web-Apps installieren. Der Filmtext-o-Mat funktioniert hier trotzdem vollständig im Browser-Tab. Wer ihn als eigenes Programm möchte, öffnet ihn einmal in <b>Chrome</b> oder <b>Edge</b> und installiert ihn dort.</p>",
+  "in.android":"<ol class='insteps'><li>Oben rechts das Browser-Menü <b>„⋮“</b> öffnen.</li><li><b>„App installieren“</b> oder <b>„Zum Startbildschirm hinzufügen“</b> wählen und bestätigen.</li></ol>",
+  "in.close":"Schließen",
+  "msg.installed":"Installiert – der Filmtext-o-Mat startet jetzt auch über sein eigenes Icon.",
   "tt.kofi":"Dem Entwickler einen Kaffee spendieren",
 
   "v.film":"Film",
@@ -1644,7 +1706,7 @@ function markStart(i){
 
 /* ---------- Writing shortcuts (also active inside input fields) ---------- */
 document.addEventListener("keydown",e=>{
-  if(docxOverlay.classList.contains("show")||bkOverlay.classList.contains("show")) return;
+  if(docxOverlay.classList.contains("show")||bkOverlay.classList.contains("show")||inOverlay.classList.contains("show")) return;
   const isEnter=(e.key==="Enter"||e.code==="Enter"||e.code==="NumpadEnter");
   // Ctrl/Cmd+Shift+Enter: insert a new row BELOW the active one and jump into it
   if((e.ctrlKey||e.metaKey) && e.shiftKey && !e.altKey && isEnter){
@@ -1673,7 +1735,8 @@ document.addEventListener("keydown",e=>{
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape" && docxOverlay.classList.contains("show")){ closeDocx(); return; }
   if(e.key==="Escape" && bkOverlay.classList.contains("show")){ closeBackups(); return; }
-  if(docxOverlay.classList.contains("show")||bkOverlay.classList.contains("show")) return;
+  if(e.key==="Escape" && inOverlay.classList.contains("show")){ closeInstall(); return; }
+  if(docxOverlay.classList.contains("show")||bkOverlay.classList.contains("show")||inOverlay.classList.contains("show")) return;
   if(e.ctrlKey||e.metaKey||e.altKey) return;
   const tag=e.target.tagName;
   if(tag==="TEXTAREA"||tag==="INPUT"||tag==="BUTTON"||e.target.isContentEditable) return;
@@ -2269,10 +2332,66 @@ function setTextLang(lang, silent){
 document.getElementById("uiLangSel").addEventListener("change",e=>setUiLang(e.target.value));
 document.getElementById("textLangSel").addEventListener("change",e=>{ setTextLang(e.target.value); markDirty(); });
 
+/* ---------- V3.01: install as an app ---------- */
+const inOverlay=document.getElementById("inOverlay");
+const btnInstall=document.getElementById("btnInstall");
+let installPrompt=null;                    // Chrome/Edge/Android: the browser's deferred install dialog
+const CAN_INSTALL_HERE=(location.protocol==="https:" || location.hostname==="localhost" || location.hostname==="127.0.0.1");
+const UA=navigator.userAgent;
+const IS_MAC_SAFARI=!IS_IOS && /Macintosh/.test(UA) && /Safari\//.test(UA) && !/Chrome|Chromium|CriOS|Edg\/|Firefox|FxiOS|OPR\//.test(UA);
+const IS_ANDROID=/Android/.test(UA);
+const IS_EDGE=/Edg\//.test(UA);
+const IS_DESKTOP_FIREFOX=/Firefox\//.test(UA) && !IS_ANDROID && !IS_IOS;   // cannot install web apps at all
+function installGuideKey(){
+  if(!CAN_INSTALL_HERE) return "in.file";
+  if(IS_DESKTOP_FIREFOX) return "in.firefox";
+  if(IS_IOS) return "in.ios";
+  if(IS_MAC_SAFARI) return "in.mac";
+  if(IS_ANDROID) return "in.android";
+  if(IS_EDGE) return "in.edge";
+  return "in.chrome";
+}
+function isStandalone(){
+  try{
+    if(navigator.standalone===true) return true;
+    return ["standalone","window-controls-overlay","minimal-ui","fullscreen"].some(m=>matchMedia("(display-mode: "+m+")").matches);
+  }catch(err){ return false; }
+}
+function syncInstallBtn(){
+  const show=!isStandalone();
+  const was=btnInstall.style.display!=="none";
+  btnInstall.style.display=show?"":"none";
+  if(was!==show) syncAppbar();             // the toolbar may wrap differently
+}
+function openInstall(){
+  const body=document.getElementById("inBody");
+  body.dataset.i18nHtml=installGuideKey();
+  const sub=inOverlay.querySelector(".modal-sub");   // "Afterwards it starts from its icon…" only fits where installing works
+  if(sub) sub.style.display=(body.dataset.i18nHtml==="in.file"||body.dataset.i18nHtml==="in.firefox")?"none":"";
+  body.innerHTML=t(body.dataset.i18nHtml);
+  inOverlay.classList.add("show");
+  document.getElementById("inClose").focus();
+}
+function closeInstall(){ inOverlay.classList.remove("show"); btnInstall.focus(); }
+window.addEventListener("beforeinstallprompt",e=>{ e.preventDefault(); installPrompt=e; syncInstallBtn(); });
+window.addEventListener("appinstalled",()=>{ installPrompt=null; syncInstallBtn(); toast(t("msg.installed")); });
+btnInstall.addEventListener("click",async ()=>{
+  if(installPrompt){
+    const p=installPrompt; installPrompt=null;
+    try{ await p.prompt(); await p.userChoice; }catch(err){}
+    syncInstallBtn();
+    return;
+  }
+  openInstall();
+});
+document.getElementById("inClose").addEventListener("click",closeInstall);
+inOverlay.addEventListener("click",e=>{ if(e.target===inOverlay) closeInstall(); });
+try{ matchMedia("(display-mode: standalone)").addEventListener("change",syncInstallBtn); }catch(err){}
+
 /* ---------- Start ---------- */
 document.getElementById("uiLangSel").value=uiLang;
 document.getElementById("textLangSel").value=textLang;
-applyI18n(); applyTextLang(); applyDescCol();
+applyI18n(); applyTextLang(); applyDescCol(); syncInstallBtn();
 seed(); render(); clearDirty(); updateVideoClock(); syncAppbar(); maybeOfferRestore();
 /* V2.957: start-up completed – remove the no-script notice (last step on purpose, see header note) */
 (function(){ const n=document.getElementById("nojs"); if(n && n.parentNode) n.parentNode.removeChild(n); syncAppbar(); })();

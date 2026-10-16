@@ -2,7 +2,7 @@
    Network first, stored copy as fallback: online, everybody always gets the newest uploaded
    version; offline, the last loaded version keeps working. Only the program files pass through
    here – films and projects never touch the network. */
-const CACHE = "filmtext-o-mat-v3";
+const CACHE = "filmtext-o-mat-v3.03";
 const SHELL = ["./", "index.html", "manifest.webmanifest",
                "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"];
 
